@@ -18,14 +18,17 @@ HEADERS := \
 	fsecs.h \
 	mdriver.h \
 	memlib.h \
-	validator.h
+	validator.h \
+	allocator_helper.h \
+	my_checker.h
 
 # Blank line ends list.
 
 # If you add a new file called "filename.c", you should
 # add "filename.o \" to this list.
 OBJS := \
-	memlib.o
+	memlib.o \
+	my_checker.o
 
 MDRIVER_OBJS:= \
 	allocator.o \

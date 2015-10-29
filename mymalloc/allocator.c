@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "./allocator_interface.h"
+#include "./allocator_helper.h"
+#include "./my_checker.h"
 #include "./memlib.h"
 
 // Don't call libc malloc!
@@ -41,70 +43,123 @@
 // Rounds up to the nearest multiple of ALIGNMENT.
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~(ALIGNMENT-1))
 
-// The smallest aligned size that will hold a size_t value.
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+#define IS_ALIGNED(ptr) ((((uint64_t) ptr) & (ALIGNMENT-1)) == 0)
+
+// This is a link to all the bins that contain free chunks of memory.
+// They are of the following sizes:
+// 0. (Special) Points to the end of the heap.
+// 1. (Special) A chunk that will be used/split if a malloc can't find space
+// 2. (Special) HUUUUGE CHUNKS (> HUGE_BIN_CUTOFF)
+// 3. 24 bytes
+// 4. 32 bytes
+// ...
+// 31. 248 bytes
+// 32. 256 - 383 bytes
+// 33. 384 - 511 bytes
+// 34. 512 - 767 bytes
+// ...
+// 62. 8388608 - 12582911 bytes
+// 63. 12582912 - 16777215 bytes
+#define NUM_OF_BINS 64
+static chunk_t* bins[NUM_OF_BINS];
+
+#define LOGARITHMIC_START 249
+// Anything 249 bytes or larger will go in the "large" bins
+
+#define HUGE_BIN_CUTOFF 16777215
+// Anything larger than this goes in the huge bin
+
+#define END_OF_HEAP_BIN (bins[0])
+#define VICTIM_BIN (bins[1])
+#define HUGE_BIN (bins[2])
 
 // check - This checks our invariant that the size_t header before every
 // block points to either the beginning of the next block, or the end of the
 // heap.
+
 int my_check() {
-  char *p;
-  char *lo = (char*)mem_heap_lo();
-  char *hi = (char*)mem_heap_hi() + 1;
-  size_t size = 0;
+  return my_checker(bins, NUM_OF_BINS);
+}
 
-  p = lo;
-  while (lo <= p && p < hi) {
-    size = ALIGN(*(size_t*)p + SIZE_T_SIZE);
-    p += size;
-  }
 
-  if (p != hi) {
-    printf("Bad headers did not end at heap_hi!\n");
-    printf("heap_lo: %p, heap_hi: %p, size: %lu, p: %p\n", lo, hi, size, p);
-    return -1;
-  }
 
+// init - Initialize the malloc package.  Called once before any other
+// calls are made.
+
+// This simple implementation initializes some large chunk of memory right off the
+// bat by sbrk
+
+#ifndef INITIAL_SBRK_SIZE
+#define INITIAL_SBRK_SIZE 8192
+#endif
+
+int my_init() {
+  chunk_t* first_chunk = mem_sbrk(INITIAL_SBRK_SIZE);
+  assert(IS_ALIGNED(first_chunk));
+  mem_sbrk(sizeof(size_int));
+  first_chunk->current_size = INITIAL_SBRK_SIZE;
+  SET_CURRENT_INUSE(first_chunk);
+  END_OF_HEAP_BIN = first_chunk;
   return 0;
 }
 
-// init - Initialize the malloc package.  Called once before any other
-// calls are made.  Since this is a very simple implementation, we just
-// return success.
-int my_init() {
+#define CIRCULAR_LIST_IS_LENGTH_ONE(chunk) ((chunk) == (chunk)->next && (chunk) == (chunk)->prev)
+
+// This unlinks a chunk from the circularly linked list
+// Returns 0 if the circularly linked list has more elements
+// Returns 1 if the circularly linked list ran out of elements
+static int unlink_chunk(chunk_t** chunk_ptr) {
+  chunk_t* chunk = *chunk_ptr;
+  if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
+    *chunk_ptr = NULL;
+    return 1;
+  }
+  chunk->prev->next = chunk->next;
+  chunk->next->prev = chunk->prev;
+  *chunk_ptr = chunk->next;
   return 0;
+}
+
+static int unlink_bigchunk(bigchunk_t** chunk_ptr) {
+  bigchunk_t* chunk = *chunk_ptr;
+  if (unlink_chunk((chunk_t**) chunk_ptr)) {
+    //The chunk ran out of elements in the circularly linked list, so we have to
+    //re-connect the tree
+
+    //Somehow randomly decide whether to use the right most child of the left
+    //or the left most child of the right, for now, always use the left
+
+    //TODO
+    return 1;
+  }
+  return 0;
+}
+
+//Adds the chunk to the circularly linked list
+// Returns 0 if the circularly linked list already had chunks in it
+// Returns 1 if the circularly linked list had no chunks in it
+static int link_chunk(chunk_t** old_chunk_ptr, chunk_t* new_chunk) {
+  chunk_t* old_chunk = *old_chunk_ptr;
+  if (old_chunk == NULL) {
+    new_chunk->next = new_chunk;
+    new_chunk->prev = new_chunk;
+    *old_chunk_ptr = new_chunk;
+    return 1;
+  }
+  old_chunk->prev->next = new_chunk;
+  old_chunk->prev = new_chunk;
+  *old_chunk_ptr = new_chunk;
+  return 0;
+}
+
+static int link_bigchunk(bigchunk_t** old_chunk_ptr, bigchunk_t* new_chunk) {
+  //TODO
 }
 
 //  malloc - Allocate a block by incrementing the brk pointer.
 //  Always allocate a block whose size is a multiple of the alignment.
 void * my_malloc(size_t size) {
-  // We allocate a little bit of extra memory so that we can store the
-  // size of the block we've allocated.  Take a look at realloc to see
-  // one example of a place where this can come in handy.
-  int aligned_size = ALIGN(size + SIZE_T_SIZE);
-
-  // Expands the heap by the given number of bytes and returns a pointer to
-  // the newly-allocated area.  This is a slow call, so you will want to
-  // make sure you don't wind up calling it on every malloc.
-  void *p = mem_sbrk(aligned_size);
-
-  if (p == (void *)-1) {
-    // Whoops, an error of some sort occurred.  We return NULL to let
-    // the client code know that we weren't able to allocate memory.
-    return NULL;
-  } else {
-    // We store the size of the block we've allocated in the first
-    // SIZE_T_SIZE bytes.
-    *(size_t*)p = size;
-
-    // Then, we return a pointer to the rest of the block of memory,
-    // which is at least size bytes long.  We have to cast to uint8_t
-    // before we try any pointer arithmetic because voids have no size
-    // and so the compiler doesn't know how far to move the pointer.
-    // Since a uint8_t is always one byte, adding SIZE_T_SIZE after
-    // casting advances the pointer by SIZE_T_SIZE bytes.
-    return (void *)((char *)p + SIZE_T_SIZE);
-  }
+  return NULL;
 }
 
 // free - Freeing a block does nothing.
@@ -125,7 +180,7 @@ void * my_realloc(void *ptr, size_t size) {
   // where we stashed this in the SIZE_T_SIZE bytes directly before the
   // address we returned.  Now we can back up by that many bytes and read
   // the size.
-  copy_size = *(size_t*)((uint8_t*)ptr - SIZE_T_SIZE);
+  copy_size = USERSPACE_SIZE(USER_POINTER_TO_CHUNK(ptr));
 
   // If the new block is smaller than the old one, we have to stop copying
   // early so that we don't write off the end of the new block of memory.
