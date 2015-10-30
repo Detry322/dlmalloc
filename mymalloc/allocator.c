@@ -104,11 +104,6 @@ static chunk_t* combine_chunks(chunk_t* left, chunk_t* right);
 // [END STATIC METHOD DECLARATIONS]
 /* ------------------------------------------------------------------------- */
 
-
-// check - This checks our invariant that the size_t header before every
-// block points to either the beginning of the next block, or the end of the
-// heap.
-
 int my_check() {
   return my_checker(bins, NUM_OF_BINS);
 }
@@ -118,12 +113,30 @@ int my_check() {
 // Below lies the methods to insert and remove chunks from their respective bins
 // There are different methods for large and small chunks
 
+// Pseudocode - If this chunk is in a circularly linked list of length > 1
+// unlink the node from the linked list and if this node has a parent, set the
+// parent of the next node to the parent of this node.
+
+// If this chunk is by itself in it's linked list, traverse down the tree (perhaps
+// by going left, and then right as much as possible) until you find a node with
+// no children. Promote this childless node (or linked list) to the top by copying
+// all the parameters from the old root to this new root.
+
+// Finally, if the parent isn't NO_PARENT_ROOT_NODE, set the corresponding
+// left or right child to the new child node. Return 0. If the parent is NO_PARENT_ROOT_NODE,
+// then point the bucket to the right spot. Return 1.
 static int remove_large_chunk(bigchunk_t* chunk) {
   // TODO
+  return 0;
 }
 
+// Pseudocode - If the linked list size is 1, set the bin's pointer to NULL and call
+// it a day RETURN 1 to let callers know it was the last one. Otherwise, if this
+// chunk is the bin's pointer, set the bin's pointer to the next chunk unlink this
+// node and return 0.
 static int remove_small_chunk(chunk_t* chunk) {
-
+  // TODO
+  return 0;
 }
 
 static int remove_chunk(chunk_t* chunk) {
@@ -133,12 +146,31 @@ static int remove_chunk(chunk_t* chunk) {
     return remove_small_chunk(chunk);
 }
 
+// Pseudocode - First, calculate the bin this node should go in. Set the bin
+// field of this chunk to that. If that bin is empty:
+// Calculate the fast log of the size, and subtract two. This is the "shift" field
+// Set the parent to NO_PARENT_ROOT_NODE and set the bin to point to this node. Return 2.
+// If that bin has elements: Traverse down the tree by going to the child that
+// corresponds to (chunk_size >> shift) & 1. Stop when one of these things happens:
+// 1. The node you're currently at is CHUNK_SIZES_EQUAL to the other chunk. Insert
+// This node behind the node you're currently looking at in the linked list and
+// update all the correct fields. Return 0.
+// 2. You're about to go down a path where the child is null. Simply set the parent
+// of this node to the parent, and the child of the parent to you. Set the left and
+// right pointers of the linked list to yourself. Return 1.
+// As you're traversing down the list, the "shift" field should be 1 less than it's parent.
 static int insert_large_chunk(bigchunk_t* chunk) {
-
+  // TODO
+  return 0;
 }
 
+// Pseudocode - find the bin this chunk corresponds to. If that bin is empty, set the left
+// and right pointers to itself, return 1 at the end.
+// If the bin is not empty, insert this chunk before the bin pointer's chunk. return 0 at the end
+// Finally, set the bin pointer to this chunk and return the correct value.
 static int insert_small_chunk(chunk_t* chunk) {
-
+  // TODO
+  return 0;
 }
 
 static int insert_chunk(chunk_t* chunk) {
@@ -203,16 +235,14 @@ static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
   chunk_t* result = bins[i];
   if (result != NULL) {
-    if (remove_small_chunk(result)) // if it was the last chunk in the list
-      bins[i] = NULL;
+    remove_small_chunk(result);
     return result;
   }
   // First bin didn't work? Try next bin
   if (i < 31) {
     result = bins[i+1];
     if (result != NULL) {
-      if (remove_small_chunk(result)) // same as above
-        bins[i+1] = NULL;
+      remove_small_chunk(result);
       return result;
     }
   }
@@ -226,8 +256,6 @@ static chunk_t* small_malloc(size_int request) {
   return result;
 }
 
-#define FAST_LOG2(x) (sizeof(unsigned long long)*8 - 1 - __builtin_clzll((unsigned long long)(x)))
-
 static inline bin_index large_request_index(size_int request) {
   int l = FAST_LOG2(request);
   bin_index result = 16 + 2*l + ((request >> (l-1)) & 1);
@@ -240,12 +268,14 @@ static inline bin_index large_request_index(size_int request) {
 // take the smallest chunk from the next bin (optional?). If either of these work, split it and set the remainder to
 // the victim chunk (and add the victim chunk if it exists to a bin). Otherwise return NULL.
 static chunk_t* large_malloc(size_int request) {
+  // TODO
   return NULL;
 }
 
 // Pseudocode - Extend the last chunk as far as needed so it can be split into two chunks
 // If it can't be extended that far, return null, otherwise split it in two.
 static chunk_t* end_of_heap_malloc(size_int request) {
+  // TODO
   return NULL;
 }
 
@@ -280,7 +310,27 @@ void * my_malloc(size_t size) {
 // [END MALLOC METHODS]
 /* ------------------------------------------------------------------------- */
 
-// free - Freeing a block does nothing.
+#define COMBINED_SIZES(chunk_ptr_left, chunk_ptr_right) \
+    (SAFE_SIZE((chunk_ptr_left)->current_size) + SAFE_SIZE((chunk_ptr_right)->current_size) + sizeof(size_int))
+#define CAN_COMBINE_PREVIOUS(chunk_ptr) (IS_PREVIOUS_FREE(chunk_ptr))
+#define CAN_COMBINE_NEXT(chunk_ptr) (!IS_END_OF_HEAP(chunk_ptr) && IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk_ptr)))
+
+
+// Combines two chunks together to form a single larger chunk. Assumes
+// the two chunks can be combined.
+static chunk_t* combine_chunks(chunk_t* left, chunk_t* right) {
+  size_int combined = COMBINED_SIZES(left, right);
+  if (!IS_END_OF_HEAP(right)) {
+    NEXT_HEAP_CHUNK(right)->previous_size = combined;
+    // "Free" bit should already be set, otherwise we wouldn't be combining.
+    assert(IS_PREVIOUS_FREE(NEXT_HEAP_CHUNK(right)));
+  }
+  if (VICTIM_BIN == left || VICTIM_BIN == right)
+    VICTIM_BIN = NULL;
+  left->current_size = combined;
+  assert(IS_CURRENT_FREE(left));
+  return left;
+}
 
 /*
 Pseudocode - to free a ptr, first check if the previous and next chunks are free.
@@ -300,25 +350,6 @@ Otherwise, insert this new chunk into the corresponding bin.
 
 Finally, clear the PREVIOUS_INUSE bit of the next chunk, and write the previous_size of the next chunk.
 */
-
-#define COMBINED_SIZES(chunk_ptr_left, chunk_ptr_right) \
-    (SAFE_SIZE((chunk_ptr_left)->current_size) + SAFE_SIZE((chunk_ptr_right)->current_size) + sizeof(size_int))
-#define CAN_COMBINE_PREVIOUS(chunk_ptr) (IS_PREVIOUS_FREE(chunk_ptr))
-#define CAN_COMBINE_NEXT(chunk_ptr) (!IS_END_OF_HEAP(chunk_ptr) && IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk_ptr)))
-
-static chunk_t* combine_chunks(chunk_t* left, chunk_t* right) {
-  size_int combined = COMBINED_SIZES(left, right);
-  if (!IS_END_OF_HEAP(right)) {
-    NEXT_HEAP_CHUNK(right)->previous_size = combined;
-    // "Free" bit should already be set, otherwise we wouldn't be combining.
-    assert(IS_PREVIOUS_FREE(NEXT_HEAP_CHUNK(right)));
-  }
-  if (VICTIM_BIN == left || VICTIM_BIN == right)
-    VICTIM_BIN = NULL;
-  left->current_size = combined;
-  assert(IS_CURRENT_FREE(left));
-  return left;
-}
 
 void my_free(void *ptr) {
   chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);

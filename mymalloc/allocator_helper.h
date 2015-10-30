@@ -19,7 +19,9 @@
 
 #define SAFE_SIZE(size) ((size) & ~7ULL)
 #define CHUNK_SIZE(chunk_ptr) (SAFE_SIZE((chunk_ptr)->current_size))
+#define CHUNK_SIZES_EQUAL(chunk_ptr1, chunk_ptr2) (CHUNK_SIZE(chunk_ptr1) == CHUNK_SIZE(chunk_ptr2))
 
+#define FAST_LOG2(x) (sizeof(unsigned long long)*8 - 1 - __builtin_clzll((unsigned long long)(x)))
 typedef uint64_t size_int;
 
 #define SMALLEST_MALLOC (2*sizeof(struct small_chunk*)+sizeof(size_int))
@@ -55,7 +57,7 @@ struct large_chunk {
   struct large_chunk* children[2]; //Corresponds this chunk's children.
   struct large_chunk* parent; //Corresponds to the parent in the binary tree
   unsigned int bin_number; // The bin this child is in
-  unsigned int mask; // The shift we need to do to decide if we go left or right down this node
+  unsigned int shift; // The shift we need to do to decide if we go left or right down this node
                       // For 256-511 (10D000000), this would be 6 since we need to shift 6 to the
                       // left to decide to use the left or right
                       // for 1024-2047 (10D00000000) This shift would be 8
