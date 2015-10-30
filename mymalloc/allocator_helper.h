@@ -8,6 +8,8 @@
 
 #define IS_PREVIOUS_INUSE(chunk_ptr) (((chunk_ptr)->current_size) & PREVIOUS_CHUNK_INUSE)
 #define IS_CURRENT_INUSE(chunk_ptr) (((chunk_ptr)->current_size) & CURRENT_CHUNK_INUSE)
+#define IS_PREVIOUS_FREE(chunk_ptr) (!IS_PREVIOUS_INUSE(chunk_ptr))
+#define IS_CURRENT_FREE(chunk_ptr) (!IS_CURRENT_INUSE(chunk_ptr))
 
 #define SET_PREVIOUS_INUSE(chunk_ptr) (chunk_ptr)->current_size |= PREVIOUS_CHUNK_INUSE;
 #define SET_CURRENT_INUSE(chunk_ptr) (chunk_ptr)->current_size |= CURRENT_CHUNK_INUSE;
@@ -16,6 +18,7 @@
 #define CLEAR_CURRENT_INUSE(chunk_ptr) (chunk_ptr)->current_size &= ~CURRENT_CHUNK_INUSE;
 
 #define SAFE_SIZE(size) ((size) & ~7ULL)
+#define CHUNK_SIZE(chunk_ptr) (SAFE_SIZE((chunk_ptr)->current_size))
 
 typedef uint64_t size_int;
 
@@ -52,7 +55,7 @@ struct large_chunk {
   struct large_chunk* children[2]; //Corresponds this chunk's children.
   struct large_chunk* parent; //Corresponds to the parent in the binary tree
   unsigned int bin_number; // The bin this child is in
-  unsigned int shift; // The shift we need to do to decide if we go left or right down this node
+  unsigned int mask; // The shift we need to do to decide if we go left or right down this node
                       // For 256-511 (10D000000), this would be 6 since we need to shift 6 to the
                       // left to decide to use the left or right
                       // for 1024-2047 (10D00000000) This shift would be 8

@@ -44,7 +44,7 @@ MDRIVER_OBJS:= \
 # Blank line ends list.
 
 ifeq ($(DEBUG),1)
-  CFLAGS += -DDEBUG -O0
+  CFLAGS += -DDEBUG -O0 -g3
 else
   CFLAGS += -DNDEBUG -O3
 endif
