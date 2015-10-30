@@ -63,15 +63,39 @@
 #define NUM_OF_BINS 64
 static chunk_t* bins[NUM_OF_BINS];
 
-#define LOGARITHMIC_START 249
+#define LARGE_CHUNK_CUTOFF 249
 // Anything 249 bytes or larger will go in the "large" bins
 
-#define HUGE_BIN_CUTOFF 16777215
+#define IS_LARGE_CHUNK(chunk_ptr) (SAFE_SIZE((chunk_ptr)->current_size) > LARGE_CHUNK_CUTOFF)
+#define IS_LARGE_SIZE(size) ((size) > LARGE_CHUNK_CUTOFF)
+
+#define HUGE_CHUNK_CUTOFF 16777215
 // Anything larger than this goes in the huge bin
+
+#define IS_HUGE_CHUNK(chunk_ptr) (SAFE_SIZE((chunk_ptr)->current_size) > HUGE_CHUNK_CUTOFF)
+#define IS_HUGE_SIZE(size) ((size) > HUGE_CHUNK_CUTOFF)
 
 #define END_OF_HEAP_BIN (bins[0])
 #define VICTIM_BIN (bins[1])
 #define HUGE_BIN (bins[2])
+
+
+/* ------------------------------------------------------------------------- */
+// [START STATIC METHOD DECLARATIONS]
+// Below this is just all the static methods declared so they can be used anywhere in this file
+
+static int remove_large_chunk(bigchunk_t* chunk);
+static int remove_small_chunk(chunk_t* chunk);
+static int remove_chunk(chunk_t* chunk);
+static int insert_large_chunk(bigchunk_t* chunk);
+static int insert_small_chunk(chunk_t* chunk);
+static int insert_chunk(chunk_t* chunk);
+static void* small_malloc(size_int request);
+static void* large_malloc(size_int request);
+
+// [END STATIC METHOD DECLARATIONS]
+/* ------------------------------------------------------------------------- */
+
 
 // check - This checks our invariant that the size_t header before every
 // block points to either the beginning of the next block, or the end of the
@@ -81,6 +105,43 @@ int my_check() {
   return my_checker(bins, NUM_OF_BINS);
 }
 
+/* ------------------------------------------------------------------------- */
+// [START CHUNK INSERT/REMOVE METHODS]
+// Below lies the methods to insert and remove chunks from their respective bins
+// There are different methods for large and small chunks
+
+static int remove_large_chunk(bigchunk_t* chunk) {
+  // TODO
+}
+
+static int remove_small_chunk(chunk_t* chunk) {
+
+}
+
+static int remove_chunk(chunk_t* chunk) {
+  if (IS_LARGE_CHUNK(chunk))
+    return remove_large_chunk((bigchunk_t*) chunk);
+  else
+    return remove_small_chunk(chunk);
+}
+
+static int insert_large_chunk(bigchunk_t* chunk) {
+
+}
+
+static int insert_small_chunk(chunk_t* chunk) {
+
+}
+
+static int insert_chunk(chunk_t* chunk) {
+  if (IS_LARGE_CHUNK(chunk))
+    return insert_large_chunk((bigchunk_t*) chunk);
+  else
+    return insert_small_chunk(chunk);
+}
+
+// [END CHUNK INSERT/REMOVE METHODS]
+/* ------------------------------------------------------------------------- */
 
 
 // init - Initialize the malloc package.  Called once before any other
@@ -90,80 +151,78 @@ int my_check() {
 // bat by sbrk
 
 #ifndef INITIAL_SBRK_SIZE
-#define INITIAL_SBRK_SIZE 8192
+#define INITIAL_SBRK_SIZE (8200)
 #endif
 
 int my_init() {
   chunk_t* first_chunk = mem_sbrk(INITIAL_SBRK_SIZE);
   assert(IS_ALIGNED(first_chunk));
   mem_sbrk(sizeof(size_int));
-  first_chunk->current_size = INITIAL_SBRK_SIZE;
-  SET_CURRENT_INUSE(first_chunk);
+  first_chunk->current_size = INITIAL_SBRK_SIZE - sizeof(size_int);
+  SET_PREVIOUS_INUSE(first_chunk);
   END_OF_HEAP_BIN = first_chunk;
   return 0;
 }
 
-#define CIRCULAR_LIST_IS_LENGTH_ONE(chunk) ((chunk) == (chunk)->next && (chunk) == (chunk)->prev)
 
-// This unlinks a chunk from the circularly linked list
-// Returns 0 if the circularly linked list has more elements
-// Returns 1 if the circularly linked list ran out of elements
-static int unlink_chunk(chunk_t** chunk_ptr) {
-  chunk_t* chunk = *chunk_ptr;
-  if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
-    *chunk_ptr = NULL;
-    return 1;
-  }
-  chunk->prev->next = chunk->next;
-  chunk->next->prev = chunk->prev;
-  *chunk_ptr = chunk->next;
-  return 0;
+/* ------------------------------------------------------------------------- */
+// [BEGIN CHUNK INSERT/REMOVE METHODS]
+static void* small_malloc(size_int request) {
+
 }
 
-static int unlink_bigchunk(bigchunk_t** chunk_ptr) {
-  bigchunk_t* chunk = *chunk_ptr;
-  if (unlink_chunk((chunk_t**) chunk_ptr)) {
-    //The chunk ran out of elements in the circularly linked list, so we have to
-    //re-connect the tree
+static void* large_malloc(size_int request) {
 
-    //Somehow randomly decide whether to use the right most child of the left
-    //or the left most child of the right, for now, always use the left
-
-    //TODO
-    return 1;
-  }
-  return 0;
-}
-
-//Adds the chunk to the circularly linked list
-// Returns 0 if the circularly linked list already had chunks in it
-// Returns 1 if the circularly linked list had no chunks in it
-static int link_chunk(chunk_t** old_chunk_ptr, chunk_t* new_chunk) {
-  chunk_t* old_chunk = *old_chunk_ptr;
-  if (old_chunk == NULL) {
-    new_chunk->next = new_chunk;
-    new_chunk->prev = new_chunk;
-    *old_chunk_ptr = new_chunk;
-    return 1;
-  }
-  old_chunk->prev->next = new_chunk;
-  old_chunk->prev = new_chunk;
-  *old_chunk_ptr = new_chunk;
-  return 0;
-}
-
-static int link_bigchunk(bigchunk_t** old_chunk_ptr, bigchunk_t* new_chunk) {
-  //TODO
 }
 
 //  malloc - Allocate a block by incrementing the brk pointer.
 //  Always allocate a block whose size is a multiple of the alignment.
+
+// Pseudocode - to malloc a block, first round up the requested size to the nearest
+// multiple of alignment, or SMALLEST_MALLOC, whichever is larger. If this requested size is smaller
+// than the threshold, malloc a small chunk. If this requested size is larger than the
+// threshold, malloc a large chunk.
+
+#define MAX(a, b) ((a) ^ (((a) ^ (b)) & -((a) < (b))))
+
 void * my_malloc(size_t size) {
-  return NULL;
+  if (size == 0)
+    return NULL;
+  size_int aligned_size = ALIGN(size);
+  size_int request = MAX(aligned_size, SMALLEST_MALLOC);
+  if (IS_LARGE_SIZE(request))
+    return large_malloc(request);
+  else
+    return small_malloc(request);
 }
+// [END MALLOC METHODS]
+/* ------------------------------------------------------------------------- */
 
 // free - Freeing a block does nothing.
+
+/*
+Pseudocode - to free a ptr, first check if the previous and next chunks are free.
+
+DON'T CHECK THE NEXT CHUNK IF THE CURRENT CHUNK IS THE LAST CHUNK.
+
+If they are, remove them from their bins so that we can combine with them safely.
+
+If either the front or back pointers were the designated victim, set the victim bin to NULL
+
+Then, combine with them so we get one large chunk.
+
+If this chunk (possibly combined now) is at the end of the heap, replace the END_OF_HEAP_BIN
+with this chunk, and call it a day.
+
+Otherwise, insert this new chunk into the corresponding bin.
+*/
+
+#define IS_END_OF_HEAP(chunk_ptr) ((chunk_ptr) == *END_OF_HEAP_BIN)
+#define CAN_COMBINE_PREVIOUS(chunk_ptr) (!IS_PREVIOUS_INUSE(chunk_ptr))
+#define CAN_COMBINE_NEXT(chunk_ptr) (!IS_END_OF_HEAP(chunk_ptr) && !IS_CURRENT_INUSE(NEXT_HEAP_CHUNK(chunk_ptr)))
+
 void my_free(void *ptr) {
+
 }
 
 // realloc - Implemented simply in terms of malloc and free
@@ -180,7 +239,7 @@ void * my_realloc(void *ptr, size_t size) {
   // where we stashed this in the SIZE_T_SIZE bytes directly before the
   // address we returned.  Now we can back up by that many bytes and read
   // the size.
-  copy_size = USERSPACE_SIZE(USER_POINTER_TO_CHUNK(ptr));
+  copy_size = SAFE_SIZE(USER_POINTER_TO_CHUNK(ptr)->current_size);
 
   // If the new block is smaller than the old one, we have to stop copying
   // early so that we don't write off the end of the new block of memory.
