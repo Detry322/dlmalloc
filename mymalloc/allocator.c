@@ -82,8 +82,6 @@ typedef unsigned int bin_index;
 #define VICTIM_BIN (bins[1])
 #define HUGE_BIN (bins[2])
 
-#define IS_END_OF_HEAP(chunk_ptr) ((chunk_ptr) == USER_POINTER_TO_CHUNK(mem_heap_hi() + 1 - CHUNK_SIZE(chunk_ptr)))
-
 
 /* ------------------------------------------------------------------------- */
 // [START STATIC METHOD DECLARATIONS]
@@ -107,6 +105,33 @@ static chunk_t* combine_chunks(chunk_t* left, chunk_t* right);
 int my_check() {
   return my_checker(bins, NUM_OF_BINS);
 }
+
+// init - Initialize the malloc package.  Called once before any other
+// calls are made.
+
+// This simple implementation initializes some large chunk of memory right off the
+// bat by sbrk
+
+#ifndef INITIAL_CHUNK_SIZE
+#define INITIAL_CHUNK_SIZE (8192)
+#endif
+
+int my_init() {
+  void *brk = mem_heap_hi() + 1;
+  int req_size = ALIGN((uint64_t)brk) - (uint64_t)brk;
+  if (req_size != 0)
+    mem_sbrk(req_size);
+  assert(IS_ALIGNED(mem_heap_hi() + 1));
+  chunk_t* first_chunk = mem_sbrk(INITIAL_CHUNK_SIZE + 2*sizeof(size_int));
+  assert(IS_ALIGNED(first_chunk));
+  first_chunk->current_size = INITIAL_CHUNK_SIZE;
+  SET_PREVIOUS_INUSE(first_chunk);
+  END_OF_HEAP_BIN = first_chunk;
+  assert(IS_END_OF_HEAP(first_chunk));
+  assert(IS_END_OF_HEAP(END_OF_HEAP_BIN));
+  return 0;
+}
+
 
 /* ------------------------------------------------------------------------- */
 // [START CHUNK INSERT/REMOVE METHODS]
@@ -182,26 +207,6 @@ static int insert_chunk(chunk_t* chunk) {
 
 // [END CHUNK INSERT/REMOVE METHODS]
 /* ------------------------------------------------------------------------- */
-
-
-// init - Initialize the malloc package.  Called once before any other
-// calls are made.
-
-// This simple implementation initializes some large chunk of memory right off the
-// bat by sbrk
-
-#ifndef INITIAL_SBRK_SIZE
-#define INITIAL_SBRK_SIZE (8192 + 16)
-#endif
-
-int my_init() {
-  chunk_t* first_chunk = mem_sbrk(INITIAL_SBRK_SIZE);
-  assert(IS_ALIGNED(first_chunk));
-  first_chunk->current_size = INITIAL_SBRK_SIZE - 2*sizeof(size_int);
-  SET_PREVIOUS_INUSE(first_chunk);
-  END_OF_HEAP_BIN = first_chunk;
-  return 0;
-}
 
 
 /* ------------------------------------------------------------------------- */
