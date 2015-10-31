@@ -72,6 +72,9 @@ typedef unsigned int bin_index;
 #define IS_LARGE_CHUNK(chunk_ptr) (CHUNK_SIZE(chunk_ptr) > LARGE_CHUNK_CUTOFF)
 #define IS_LARGE_SIZE(size) ((size) > LARGE_CHUNK_CUTOFF)
 
+#define IS_SMALL_CHUNK(chunk_ptr) (!IS_LARGE_CHUNK(chunk_ptr))
+#define IS_SMALL_SIZE(size) (!IS_LARGE_SIZE(size))
+
 #define HUGE_CHUNK_CUTOFF 16777215
 // Anything larger than this goes in the huge bin
 
@@ -136,6 +139,7 @@ int my_init() {
 // [START INDEXING METHODS]
 
 static inline bin_index small_request_index(size_int request) {
+  assert(IS_SMALL_SIZE(request));
   bin_index result = request >> 3;
   assert(result > 2 && result < 33);
   return result;
@@ -143,6 +147,7 @@ static inline bin_index small_request_index(size_int request) {
 
 
 static inline bin_index large_request_index(size_int request) {
+  assert(IS_LARGE_SIZE(request));
   int l = FAST_LOG2(request);
   bin_index result = 16 + 2*l + ((request >> (l-1)) & 1);
   assert(result > 31 && result < 64);
@@ -169,7 +174,49 @@ static inline bin_index large_request_index(size_int request) {
 // left or right child to the new child node. Return 0. If the parent is NO_PARENT_ROOT_NODE,
 // then point the bucket to the right spot. Return 1.
 static int remove_large_chunk(bigchunk_t* chunk) {
-  // TODO
+  assert(IS_LARGE_CHUNK(chunk));
+  if (IS_HUGE_CHUNK(chunk)) {
+    assert(1 == 0);
+    // TODO
+    printf("remove: huge chunk not done yet...\n");
+    exit(1);
+  }
+  size_int size = CHUNK_SIZE(chunk);
+  bin_index n = large_request_index(size);
+  bigchunk_t* replacement;
+  if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
+    bigchunk_t* current;
+    // First, go down the left side
+    current = chunk->children[0];
+    // "If it has at least one child, go to that child"
+    while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
+      current = (current->children[1] != NULL) ? current->children[1] : current->children[0];
+    }
+    // If we didn't find anything, go down right side
+    if (current == NULL) {
+      current = chunk->children[1];
+      while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
+        current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
+      }
+    }
+    replacement = current;
+  } else {
+    chunk->prev->next = chunk->next;
+    chunk->next->prev = chunk->prev;
+    replacement = chunk->next;
+  }
+  if (replacement != NULL) {
+    replacement->parent = chunk->parent;
+    replacement->children[0] = chunk->children[0];
+    replacement->children[1] = chunk->children[1];
+    replacement->shift = chunk->shift;
+  }
+  if (chunk->parent == NO_PARENT_ROOT_NODE) {
+    bins[n] = (chunk_t*) replacement;
+  } else if (chunk->parent != NULL) {
+    chunk->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
+  }
+  chunk->next = chunk->prev = NULL;
   return 0;
 }
 
@@ -178,6 +225,7 @@ static int remove_large_chunk(bigchunk_t* chunk) {
 // chunk is the bin's pointer, set the bin's pointer to the next chunk unlink this
 // node and return 0.
 static int remove_small_chunk(chunk_t* chunk) {
+  assert(IS_SMALL_CHUNK(chunk));
   bin_index n = small_request_index(CHUNK_SIZE(chunk));
   if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
     bins[n] = NULL;
@@ -212,8 +260,49 @@ static int remove_chunk(chunk_t* chunk) {
 // right pointers of the linked list to yourself. Return 1.
 // As you're traversing down the list, the "shift" field should be 1 less than it's parent.
 static int insert_large_chunk(bigchunk_t* chunk) {
-  // TODO
-  return 0;
+  assert(IS_LARGE_CHUNK(chunk));
+  if (IS_HUGE_CHUNK(chunk)) {
+    assert(1 == 0);
+    // TODO
+    printf("insert: huge chunk not done yet...\n");
+    exit(1);
+  }
+  bin_index n = large_request_index(CHUNK_SIZE(chunk));
+  chunk->bin_number = n;
+  chunk->children[0] = NULL;
+  chunk->children[1] = NULL;
+  bigchunk_t* parent = NO_PARENT_ROOT_NODE;
+  bigchunk_t* current = (bigchunk_t*) bins[n];
+  size_int size = CHUNK_SIZE(chunk);
+  while (current != NULL) {
+    if (CHUNK_SIZES_EQUAL(current, chunk)) {
+      chunk->parent = NO_PARENT_CIRCLE_NODE;
+      chunk->shift = current->shift;
+      chunk->next = current;
+      chunk->prev = current->prev;
+      current->prev->next = chunk;
+      current->prev = chunk;
+      return 0;
+    }
+    parent = current;
+    current = current->children[(size >> current->shift) & 1];
+  }
+  assert(current == NULL);
+  chunk->parent = parent;
+  int result = 0;
+  if (parent == NO_PARENT_ROOT_NODE) {
+    // This means it skipped the while loop.
+    chunk->shift = FAST_LOG2(CHUNK_SIZE(chunk)) - 2;
+    bins[n] = (chunk_t*) chunk;
+    result = 2;
+  } else {
+    parent->children[(size >> parent->shift) & 1] = chunk;
+    chunk->shift = parent->shift - 1;
+    result = 1;
+  }
+  chunk->next = chunk;
+  chunk->prev = chunk;
+  return result;
 }
 
 // Pseudocode - find the bin this chunk corresponds to. If that bin is empty, set the left
@@ -221,6 +310,7 @@ static int insert_large_chunk(bigchunk_t* chunk) {
 // If the bin is not empty, insert this chunk before the bin pointer's chunk. return 0 at the end
 // Finally, set the bin pointer to this chunk and return the correct value.
 static int insert_small_chunk(chunk_t* chunk) {
+  assert(IS_SMALL_CHUNK(chunk));
   int result = 0;
   bin_index n = small_request_index(CHUNK_SIZE(chunk));
   if (bins[n] == NULL) {
@@ -350,6 +440,7 @@ void * my_malloc(size_t size) {
     SET_CURRENT_INUSE(result);
     SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(result));
   }
+  assert(my_check() == 0);
   return result;
 }
 // [END MALLOC METHODS]
@@ -416,6 +507,7 @@ void my_free(void *ptr) {
   } else {
     insert_chunk(chunk);
   }
+  assert(my_check() == 0);
 }
 
 // realloc - Implemented simply in terms of malloc and free
@@ -445,6 +537,7 @@ void * my_realloc(void *ptr, size_t size) {
   // Release the old block.
   my_free(ptr);
 
+  assert(my_check() == 0);
   // Return a pointer to the new block.
   return newptr;
 }

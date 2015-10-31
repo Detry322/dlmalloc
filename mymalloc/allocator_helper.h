@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifndef _ALLOCATOR_STRUCTS_H
 #define _ALLOCATOR_STRUCTS_H
