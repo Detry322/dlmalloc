@@ -132,6 +132,24 @@ int my_init() {
   return 0;
 }
 
+/* ------------------------------------------------------------------------- */
+// [START INDEXING METHODS]
+
+static inline bin_index small_request_index(size_int request) {
+  bin_index result = request >> 3;
+  assert(result > 2 && result < 33);
+  return result;
+}
+
+
+static inline bin_index large_request_index(size_int request) {
+  int l = FAST_LOG2(request);
+  bin_index result = 16 + 2*l + ((request >> (l-1)) & 1);
+  assert(result > 31 && result < 64);
+  return result;
+}
+// [END INDEXING METHODS]
+/* ------------------------------------------------------------------------- */
 
 /* ------------------------------------------------------------------------- */
 // [START CHUNK INSERT/REMOVE METHODS]
@@ -160,7 +178,16 @@ static int remove_large_chunk(bigchunk_t* chunk) {
 // chunk is the bin's pointer, set the bin's pointer to the next chunk unlink this
 // node and return 0.
 static int remove_small_chunk(chunk_t* chunk) {
-  // TODO
+  bin_index n = small_request_index(CHUNK_SIZE(chunk));
+  if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
+    bins[n] = NULL;
+    return 1;
+  }
+  if (bins[n] == chunk)
+    bins[n] = chunk->next;
+  chunk->next->prev = chunk->prev;
+  chunk->prev->next = chunk->next;
+  chunk->next = chunk->prev = NULL;
   return 0;
 }
 
@@ -194,8 +221,20 @@ static int insert_large_chunk(bigchunk_t* chunk) {
 // If the bin is not empty, insert this chunk before the bin pointer's chunk. return 0 at the end
 // Finally, set the bin pointer to this chunk and return the correct value.
 static int insert_small_chunk(chunk_t* chunk) {
-  // TODO
-  return 0;
+  int result = 0;
+  bin_index n = small_request_index(CHUNK_SIZE(chunk));
+  if (bins[n] == NULL) {
+    chunk->next = chunk;
+    chunk->prev = chunk;
+    result = 1;
+  } else {
+    chunk->next = bins[n];
+    chunk->prev = bins[n]->prev;
+    chunk->prev->next = chunk;
+    chunk->next->prev = chunk;
+  }
+  bins[n] = chunk;
+  return result;
 }
 
 static int insert_chunk(chunk_t* chunk) {
@@ -212,12 +251,6 @@ static int insert_chunk(chunk_t* chunk) {
 /* ------------------------------------------------------------------------- */
 // [BEGIN MALLOC METHODS]
 
-
-static inline bin_index small_request_index(size_int request) {
-  bin_index result = request >> 3;
-  assert(result > 2 && result < 33);
-  return result;
-}
 
 #define CAN_SPLIT_CHUNK(chunk_ptr, size) (CHUNK_SIZE(chunk_ptr) >= size + SMALLEST_CHUNK)
 
@@ -257,14 +290,10 @@ static chunk_t* small_malloc(size_int request) {
       CAN_SPLIT_CHUNK(VICTIM_BIN, request)) /* And is large enough to be split */ {
     result = VICTIM_BIN;
     VICTIM_BIN = split_chunk(VICTIM_BIN, request);
+  } else if (VICTIM_BIN != NULL && CHUNK_SIZE(VICTIM_BIN) >= request) {
+    result = VICTIM_BIN;
+    VICTIM_BIN = NULL;
   }
-  return result;
-}
-
-static inline bin_index large_request_index(size_int request) {
-  int l = FAST_LOG2(request);
-  bin_index result = 16 + 2*l + ((request >> (l-1)) & 1);
-  assert(result > 31 && result < 64);
   return result;
 }
 
@@ -277,11 +306,22 @@ static chunk_t* large_malloc(size_int request) {
   return NULL;
 }
 
+
+#ifndef EXTENSION_SIZE
+#define EXTENSION_SIZE (SMALLEST_CHUNK + 128)
+#endif
+
 // Pseudocode - Extend the last chunk as far as needed so it can be split into two chunks
 // If it can't be extended that far, return null, otherwise split it in two.
 static chunk_t* end_of_heap_malloc(size_int request) {
-  // TODO
-  return NULL;
+  if (!CAN_SPLIT_CHUNK(END_OF_HEAP_BIN, request)) {
+    void* new = mem_sbrk(request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE);
+    if (new == NULL)
+      return NULL;
+  }
+  chunk_t* result = END_OF_HEAP_BIN;
+  END_OF_HEAP_BIN = split_chunk(END_OF_HEAP_BIN, request);
+  return result;
 }
 
 //  malloc - Allocate a block by incrementing the brk pointer.
