@@ -346,8 +346,10 @@ static int insert_chunk(chunk_t* chunk) {
 
 // Splits a chunk in two pieces, and returns the address of the second chunk
 static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
+  assert(CAN_SPLIT_CHUNK(chunk, request));
+  assert(IS_CURRENT_FREE(chunk));
   size_int leftover = CHUNK_SIZE(chunk) - request - sizeof(size_int);
-  chunk->current_size = request;
+  chunk->current_size = request | IS_PREVIOUS_INUSE(chunk);
   chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
   next_chunk->previous_size = request;
   next_chunk->current_size = leftover;
