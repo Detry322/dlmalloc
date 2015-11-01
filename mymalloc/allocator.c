@@ -392,8 +392,52 @@ static chunk_t* small_malloc(size_int request) {
 // take the smallest chunk from the next bin (optional?). If either of these work, split it and set the remainder to
 // the victim chunk (and add the victim chunk if it exists to a bin). Otherwise return NULL.
 static chunk_t* large_malloc(size_int request) {
-  // TODO
-  return NULL;
+  if (IS_HUGE_SIZE(request)) {
+    assert(1 == 0);
+    // TODO
+    printf("malloc: huge chunk not done yet...\n");
+    exit(1);
+  }
+  bin_index n = large_request_index(request);
+  bigchunk_t* best_chunk = NULL;
+  size_int best_size = 2*request; // Guaranteted to not be in this bin.
+  bigchunk_t* current = (bigchunk_t*) bins[n];
+  while (current != NULL) {
+    int decision = (request >> current->shift) & 1;
+    if (CHUNK_SIZE(current) == request) {
+      best_chunk = current;
+      break;
+    } else if (CHUNK_SIZE(current) < best_size && CHUNK_SIZE(current) > request) {
+      best_size = CHUNK_SIZE(current);
+      best_chunk = current;
+    }
+    if (!decision && current->children[1] != NULL && CHUNK_SIZE(current->children[1]) < best_size) {
+      best_size = CHUNK_SIZE(current->children[1]);
+      best_chunk = current->children[1];
+    }
+    current = current->children[decision];
+  }
+  if (best_chunk == NULL && n < 63 && bins[n+1] != NULL) {
+    // Find smallest chunk in next bin;
+    best_chunk = (bigchunk_t*) bins[n+1];
+    best_size = CHUNK_SIZE(bins[n+1]);
+    while (current != NULL) {
+      if (CHUNK_SIZE(current) < best_size) {
+        best_chunk = current;
+        best_size = CHUNK_SIZE(current);
+      }
+      current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
+    }
+  }
+  if (best_chunk == NULL)
+    return NULL;
+  remove_large_chunk(best_chunk);
+  if (CAN_SPLIT_CHUNK(best_chunk, request)) {
+    if (VICTIM_BIN != NULL)
+      insert_chunk(VICTIM_BIN);
+    VICTIM_BIN = split_chunk((chunk_t*) best_chunk, request);
+  }
+  return (chunk_t*) best_chunk;
 }
 
 
