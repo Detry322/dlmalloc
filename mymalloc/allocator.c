@@ -66,25 +66,6 @@ static chunk_t* bins[NUM_OF_BINS];
 
 typedef unsigned int bin_index;
 
-#define LARGE_CHUNK_CUTOFF 249
-// Anything 249 bytes or larger will go in the "large" bins
-
-#define IS_LARGE_CHUNK(chunk_ptr) (CHUNK_SIZE(chunk_ptr) > LARGE_CHUNK_CUTOFF)
-#define IS_LARGE_SIZE(size) ((size) > LARGE_CHUNK_CUTOFF)
-
-#define IS_SMALL_CHUNK(chunk_ptr) (!IS_LARGE_CHUNK(chunk_ptr))
-#define IS_SMALL_SIZE(size) (!IS_LARGE_SIZE(size))
-
-#define HUGE_CHUNK_CUTOFF 16777215
-// Anything larger than this goes in the huge bin
-
-#define IS_HUGE_CHUNK(chunk_ptr) (CHUNK_SIZE(chunk_ptr) > HUGE_CHUNK_CUTOFF)
-#define IS_HUGE_SIZE(size) ((size) > HUGE_CHUNK_CUTOFF)
-
-#define END_OF_HEAP_BIN (bins[0])
-#define VICTIM_BIN (bins[1])
-#define HUGE_BIN (bins[2])
-
 
 /* ------------------------------------------------------------------------- */
 // [START STATIC METHOD DECLARATIONS]
@@ -206,20 +187,31 @@ static int remove_large_chunk(bigchunk_t* chunk) {
   } else {
     chunk->prev->next = chunk->next;
     chunk->next->prev = chunk->prev;
+    chunk->next = chunk->prev = NULL;
     replacement = chunk->next;
   }
   if (replacement != NULL) {
     replacement->parent = chunk->parent;
     replacement->children[0] = chunk->children[0];
     replacement->children[1] = chunk->children[1];
+    if (replacement->children[0] != NULL)
+      replacement->children[0]->parent = replacement;
+    if (replacement->children[1] != NULL)
+      replacement->children[1]->parent = replacement;
     replacement->shift = chunk->shift;
-  }
-  if (chunk->parent == NO_PARENT_ROOT_NODE) {
-    bins[n] = (chunk_t*) replacement;
-  } else if (chunk->parent != NULL) {
-    chunk->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
+    bigchunk_t* next = replacement->next;
+    while (next != replacement) { // potentially very slow
+      next->shift = chunk->shift;
+      next = next->next;
+    }
+    if (replacement->parent == NO_PARENT_ROOT_NODE) {
+      bins[n] = (chunk_t*) replacement;
+    } else if (chunk->parent != NULL) {
+      replacement->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
+    }
   }
   chunk->next = chunk->prev = NULL;
+  assert(replacement == NULL || n == replacement->bin_number);
   return 0;
 }
 
@@ -262,6 +254,7 @@ static int remove_chunk(chunk_t* chunk) {
 // of this node to the parent, and the child of the parent to you. Set the left and
 // right pointers of the linked list to yourself. Return 1.
 // As you're traversing down the list, the "shift" field should be 1 less than it's parent.
+
 static int insert_large_chunk(bigchunk_t* chunk) {
   assert(IS_LARGE_CHUNK(chunk));
   if (IS_HUGE_CHUNK(chunk)) {
@@ -291,6 +284,7 @@ static int insert_large_chunk(bigchunk_t* chunk) {
     current = current->children[(size >> current->shift) & 1];
   }
   assert(current == NULL);
+  assert(parent != NULL);
   chunk->parent = parent;
   int result = 0;
   if (parent == NO_PARENT_ROOT_NODE) {
@@ -305,6 +299,7 @@ static int insert_large_chunk(bigchunk_t* chunk) {
   }
   chunk->next = chunk;
   chunk->prev = chunk;
+  assert(n == chunk->bin_number);
   return result;
 }
 
@@ -331,10 +326,15 @@ static int insert_small_chunk(chunk_t* chunk) {
 }
 
 static int insert_chunk(chunk_t* chunk) {
-  if (IS_LARGE_CHUNK(chunk))
-    return insert_large_chunk((bigchunk_t*) chunk);
-  else
-    return insert_small_chunk(chunk);
+  int result;
+  if (IS_LARGE_CHUNK(chunk)) {
+    result = insert_large_chunk((bigchunk_t*) chunk);
+    assert(IS_VALID_LARGE_CHUNK((bigchunk_t*) chunk));
+  } else {
+    result = insert_small_chunk(chunk);
+    assert(IS_VALID_SMALL_CHUNK(chunk));
+  }
+  return result;
 }
 
 // [END CHUNK INSERT/REMOVE METHODS]
@@ -476,7 +476,7 @@ static chunk_t* end_of_heap_malloc(size_int request) {
 
 void * my_malloc(size_t size) {
   #ifdef VERBOSE
-  printf("============================ Malloc %lld ============================\n", size);
+  printf("============================ Malloc %lu ============================\n", size);
   #endif
   if (size == 0)
     return NULL;
@@ -494,6 +494,7 @@ void * my_malloc(size_t size) {
     SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(result));
   }
   #ifdef DEBUG
+  result->next = result->prev = NULL;
   assert(my_check() == 0);
   #endif
   return CHUNK_TO_USER_POINTER(result);
@@ -510,6 +511,9 @@ void * my_malloc(size_t size) {
 // Combines two chunks together to form a single larger chunk. Assumes
 // the two chunks can be combined.
 static chunk_t* combine_chunks(chunk_t* left, chunk_t* right) {
+  assert(IS_CURRENT_FREE(left) && IS_CURRENT_FREE(right));
+  assert(NEXT_HEAP_CHUNK(left) == right);
+  assert(PREVIOUS_HEAP_CHUNK(right) == left);
   size_int combined = COMBINED_SIZES(left, right);
   if (!IS_END_OF_HEAP(right)) {
     NEXT_HEAP_CHUNK(right)->previous_size = combined;
@@ -547,7 +551,10 @@ void my_free(void *ptr) {
   printf("============================ Free ============================\n");
   #endif
   chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
+  chunk->next = chunk->prev = NULL;
   CLEAR_CURRENT_INUSE(chunk);
+  CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(chunk));
+  NEXT_HEAP_CHUNK(chunk)->previous_size = CHUNK_SIZE(chunk);
   if (CAN_COMBINE_PREVIOUS(chunk)) { // This order is important, since the next chunk has to have the size at the end;
     chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
     remove_chunk(prev_chunk);
@@ -558,8 +565,6 @@ void my_free(void *ptr) {
     if (!IS_END_OF_HEAP(next_chunk))
       remove_chunk(next_chunk);
     chunk = combine_chunks(chunk, next_chunk);
-  } else {
-    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(chunk));
   }
   if (IS_END_OF_HEAP(chunk)) {
     END_OF_HEAP_BIN = chunk;
@@ -576,16 +581,18 @@ void * my_realloc(void *ptr, size_t size) {
   void *newptr;
   size_t copy_size;
 
-  // Allocate a new chunk of memory, and fail if that allocation fails.
-  newptr = my_malloc(size);
-  if (NULL == newptr)
-    return NULL;
-
   // Get the size of the old block of memory.  Take a peek at my_malloc(),
   // where we stashed this in the SIZE_T_SIZE bytes directly before the
   // address we returned.  Now we can back up by that many bytes and read
   // the size.
-  copy_size = SAFE_SIZE(USER_POINTER_TO_CHUNK(ptr)->current_size);
+  copy_size = CHUNK_SIZE(USER_POINTER_TO_CHUNK(ptr));
+  if (copy_size == size)
+    return ptr;
+
+  // Allocate a new chunk of memory, and fail if that allocation fails.
+  newptr = my_malloc(size);
+  if (NULL == newptr)
+    return NULL;
 
   // If the new block is smaller than the old one, we have to stop copying
   // early so that we don't write off the end of the new block of memory.

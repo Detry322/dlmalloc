@@ -24,6 +24,40 @@ bool is_circularly_linked_list(chunk_t* chunk) {
   return is_right_linked && is_left_linked;
 }
 
+bool is_valid_chunk_pointer(chunk_t* chunk) {
+  uint64_t offset = (uint64_t) mem_heap_lo() & 7;
+  chunk_t* start = mem_heap_lo() + offset;
+  while (true) {
+    if (start == chunk)
+      return true;
+    if (start > chunk)
+      return false;
+    start = NEXT_HEAP_CHUNK(start);
+  }
+}
+
+bool is_valid_pointer_tree(int i, bigchunk_t* chunk) {
+  if (chunk == NULL)
+    return true;
+  bool is_valid = true;
+  if (chunk->children[0] != NULL && chunk->children[0]->parent != chunk)
+    is_valid = false;
+  assert(is_valid);
+  if (chunk->children[1] != NULL && chunk->children[1]->parent != chunk)
+    is_valid = false;
+  assert(is_valid);
+  if (chunk->bin_number != i)
+    is_valid = false;
+  assert(is_valid);
+  if (!is_valid_pointer_tree(i, chunk->children[0]))
+    is_valid = false;
+  assert(is_valid);
+  if (!is_valid_pointer_tree(i, chunk->children[1]))
+    is_valid = false;
+  assert(is_valid);
+  return is_valid;
+}
+
 int my_checker(chunk_t** bins, int length) {
   static int checks = 0;
   checks++;
@@ -37,15 +71,15 @@ int my_checker(chunk_t** bins, int length) {
   int chunks = 1;
   while (true) {
     #ifdef VERBOSE
-    printf("Chunk %d%s: 0x%llx\n", chunks, (IS_END_OF_HEAP(chunk)) ? " (END OF HEAP)" : "", chunk);
-    printf("Previous Size: %ld %s\n", chunk->previous_size, (IS_PREVIOUS_INUSE(chunk)) ? " (Can't trust)" : "");
-    printf("Current Size:  %ld\n", CHUNK_SIZE(chunk));
-    printf("PREV_INUSE:    %d\n", IS_PREVIOUS_INUSE(chunk));
-    printf("CURRENT_INUSE: %d\n", IS_CURRENT_INUSE(chunk));
-    printf("Next:          0x%llx %s\n", chunk->next, (IS_CURRENT_INUSE(chunk)) ? " (Can't trust)" : "");
-    printf("Prev:          0x%llx %s\n", chunk->prev, (IS_CURRENT_INUSE(chunk)) ? " (Can't trust)" : "");
-    printf("NEXT_HEAP_CHK: 0x%llx\n", NEXT_HEAP_CHUNK(chunk));
-    printf("PREV_HEAP_CHK: 0x%llx %s\n", PREVIOUS_HEAP_CHUNK(chunk), (IS_PREVIOUS_INUSE(chunk)) ? " (Can't trust)" : "");
+    printf("Chunk %d%s: %p\n", chunks, (IS_END_OF_HEAP(chunk)) ? " (END OF HEAP)" : "", chunk);
+    printf("Previous Size: %llu %s\n", chunk->previous_size, (IS_PREVIOUS_INUSE(chunk)) ? " (Can't trust)" : "");
+    printf("Current Size:  %llu\n", CHUNK_SIZE(chunk));
+    printf("PREV_INUSE:    %llu\n", IS_PREVIOUS_INUSE(chunk));
+    printf("CURRENT_INUSE: %llu\n", IS_CURRENT_INUSE(chunk));
+    printf("Next:          %p %s\n", chunk->next, (IS_CURRENT_INUSE(chunk)) ? " (Can't trust)" : "");
+    printf("Prev:          %p %s\n", chunk->prev, (IS_CURRENT_INUSE(chunk)) ? " (Can't trust)" : "");
+    printf("NEXT_HEAP_CHK: %p\n", NEXT_HEAP_CHUNK(chunk));
+    printf("PREV_HEAP_CHK: %p %s\n", PREVIOUS_HEAP_CHUNK(chunk), (IS_PREVIOUS_INUSE(chunk)) ? " (Can't trust)" : "");
     printf("-------\n");
     #endif
     if (IS_END_OF_HEAP(chunk))
@@ -53,8 +87,16 @@ int my_checker(chunk_t** bins, int length) {
 
     assert(chunk == USER_POINTER_TO_CHUNK(CHUNK_TO_USER_POINTER(chunk)));
     chunks++;
-    if (chunk != bins[1] && !IS_CURRENT_INUSE(chunk)) {
+    if (chunk != VICTIM_BIN && !IS_CURRENT_INUSE(chunk)) {
       assert(is_circularly_linked_list(chunk));
+      if (IS_LARGE_CHUNK(chunk) && !IS_HUGE_CHUNK(chunk)) {
+        assert(IS_VALID_LARGE_CHUNK((bigchunk_t*)chunk));
+      } else if (IS_SMALL_CHUNK(chunk)) {
+        assert(IS_VALID_SMALL_CHUNK(chunk));
+      }
+      assert(is_valid_chunk_pointer(chunk->next));
+      assert(is_valid_chunk_pointer(chunk->prev));
+      assert(is_valid_chunk_pointer(chunk));
     }
     if (!IS_CURRENT_INUSE(chunk)) {
       assert(chunk == PREVIOUS_HEAP_CHUNK(NEXT_HEAP_CHUNK(chunk)));
@@ -67,6 +109,8 @@ int my_checker(chunk_t** bins, int length) {
     chunk = NEXT_HEAP_CHUNK(chunk);
   }
   assert(IS_PREVIOUS_INUSE(chunk));
+  for (int i = 32; i < 64; i++)
+    assert(is_valid_pointer_tree(i, (bigchunk_t*) bins[i]));
   #ifdef VERBOSE
   printf("------------------------------------------------------\n");
   printf("Check #%d: Checked %d chunks.\n", checks, chunks);

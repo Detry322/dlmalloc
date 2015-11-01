@@ -41,6 +41,25 @@ typedef uint64_t size_int;
 
 #define CIRCULAR_LIST_IS_LENGTH_ONE(chunk_ptr) ((chunk_ptr) == (chunk_ptr)->next && (chunk_ptr) == (chunk_ptr)->prev)
 
+#define LARGE_CHUNK_CUTOFF 249
+// Anything 249 bytes or larger will go in the "large" bins
+
+#define IS_LARGE_CHUNK(chunk_ptr) (CHUNK_SIZE(chunk_ptr) > LARGE_CHUNK_CUTOFF)
+#define IS_LARGE_SIZE(size) ((size) > LARGE_CHUNK_CUTOFF)
+
+#define IS_SMALL_CHUNK(chunk_ptr) (!IS_LARGE_CHUNK(chunk_ptr))
+#define IS_SMALL_SIZE(size) (!IS_LARGE_SIZE(size))
+
+#define HUGE_CHUNK_CUTOFF 16777215
+// Anything larger than this goes in the huge bin
+
+#define IS_HUGE_CHUNK(chunk_ptr) (CHUNK_SIZE(chunk_ptr) > HUGE_CHUNK_CUTOFF)
+#define IS_HUGE_SIZE(size) ((size) > HUGE_CHUNK_CUTOFF)
+
+#define END_OF_HEAP_BIN (bins[0])
+#define VICTIM_BIN (bins[1])
+#define HUGE_BIN (bins[2])
+
 //size refers to the size of the chunk, not the malloc.
 struct small_chunk {
   size_int previous_size; //Only valid if the PREVIOUS_INUSE bit is not set
@@ -69,6 +88,15 @@ struct large_chunk {
 
 #define NO_PARENT_CIRCLE_NODE NULL
 #define NO_PARENT_ROOT_NODE ((struct large_chunk*) 0x1)
+
+#define IS_VALID_LARGE_CHUNK(chunk_ptr) \
+  (IS_CURRENT_FREE(chunk_ptr) && (chunk_ptr)->next != NULL && (chunk_ptr)->prev != NULL \
+    && ((chunk_ptr)->parent == NO_PARENT_ROOT_NODE || (chunk_ptr)->parent == NO_PARENT_CIRCLE_NODE || \
+    ((chunk_ptr)->parent->children[(CHUNK_SIZE(chunk_ptr) >> (chunk_ptr)->parent->shift) & 1] == (chunk_ptr)) \
+    ))
+
+#define IS_VALID_SMALL_CHUNK(chunk_ptr) \
+  (IS_CURRENT_FREE(chunk_ptr) && (chunk_ptr)->next != NULL && (chunk_ptr)->prev != NULL)
 
 typedef struct small_chunk chunk_t;
 typedef struct large_chunk bigchunk_t;
