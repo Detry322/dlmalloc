@@ -3,7 +3,7 @@ TARGETS := mdriver
 LOCKER=/afs/csail.mit.edu/proj/courses/6.172
 CC := gcc
 # You can add -Werr to GCC to force all warnings to turn into errors
-CFLAGS := -std=gnu99 -g -Wall -Wno-write-strings
+CFLAGS := -std=gnu99 -Wall -Wno-write-strings
 LDFLAGS := -lpthread
 # Macros defined by the user or OpenTuner
 PARAMS :=
@@ -44,9 +44,9 @@ MDRIVER_OBJS:= \
 # Blank line ends list.
 
 ifeq ($(DEBUG),1)
-  CFLAGS += -DDEBUG -O0 -g3
+  CFLAGS += -g3 -DDEBUG -O0
 else
-  CFLAGS += -DNDEBUG -O3
+  CFLAGS += -g -DNDEBUG -O3
 endif
 
 CFLAGS += $(OTHER_CFLAGS)
