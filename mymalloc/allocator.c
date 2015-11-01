@@ -452,6 +452,7 @@ static chunk_t* large_malloc(size_int request) {
 static chunk_t* end_of_heap_malloc(size_int request) {
   if (!CAN_SPLIT_CHUNK(END_OF_HEAP_BIN, request)) {
     void* new = mem_sbrk(request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE);
+    END_OF_HEAP_BIN->current_size += request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE;
     if (new == NULL)
       return NULL;
   }
