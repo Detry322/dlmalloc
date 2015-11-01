@@ -204,11 +204,11 @@ static int remove_large_chunk(bigchunk_t* chunk) {
       next->shift = chunk->shift;
       next = next->next;
     }
-    if (replacement->parent == NO_PARENT_ROOT_NODE) {
-      bins[n] = (chunk_t*) replacement;
-    } else if (chunk->parent != NULL) {
-      replacement->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
-    }
+  }
+  if (chunk->parent == NO_PARENT_ROOT_NODE) {
+    bins[n] = (chunk_t*) replacement;
+  } else if (chunk->parent != NULL) {
+    chunk->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
   }
   chunk->next = chunk->prev = NULL;
   assert(replacement == NULL || n == replacement->bin_number);
@@ -416,7 +416,7 @@ static chunk_t* large_malloc(size_int request) {
       best_size = CHUNK_SIZE(current);
       best_chunk = current;
     }
-    if (!decision && current->children[1] != NULL && CHUNK_SIZE(current->children[1]) < best_size) {
+    if (decision == 0 && current->children[1] != NULL && CHUNK_SIZE(current->children[1]) < best_size) {
       best_size = CHUNK_SIZE(current->children[1]);
       best_chunk = current->children[1];
     }
