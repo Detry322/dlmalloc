@@ -132,6 +132,9 @@ int my_init() {
   END_OF_HEAP_BIN = first_chunk;
   assert(IS_END_OF_HEAP(first_chunk));
   assert(IS_END_OF_HEAP(END_OF_HEAP_BIN));
+  #ifdef DEBUG
+  assert(my_check() == 0);
+  #endif
   return 0;
 }
 
@@ -472,6 +475,9 @@ static chunk_t* end_of_heap_malloc(size_int request) {
 #define MAX(a, b) ((a) ^ (((a) ^ (b)) & -((a) < (b))))
 
 void * my_malloc(size_t size) {
+  #ifdef VERBOSE
+  printf("============================ Malloc %lld ============================\n", size);
+  #endif
   if (size == 0)
     return NULL;
   size_int aligned_size = ALIGN(size);
@@ -487,8 +493,10 @@ void * my_malloc(size_t size) {
     SET_CURRENT_INUSE(result);
     SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(result));
   }
+  #ifdef DEBUG
   assert(my_check() == 0);
-  return result;
+  #endif
+  return CHUNK_TO_USER_POINTER(result);
 }
 // [END MALLOC METHODS]
 /* ------------------------------------------------------------------------- */
@@ -510,7 +518,7 @@ static chunk_t* combine_chunks(chunk_t* left, chunk_t* right) {
   }
   if (VICTIM_BIN == left || VICTIM_BIN == right)
     VICTIM_BIN = NULL;
-  left->current_size = combined;
+  left->current_size = combined | IS_PREVIOUS_INUSE(left);
   assert(IS_CURRENT_FREE(left));
   return left;
 }
@@ -535,6 +543,9 @@ Finally, clear the PREVIOUS_INUSE bit of the next chunk, and write the previous_
 */
 
 void my_free(void *ptr) {
+  #ifdef VERBOSE
+  printf("============================ Free ============================\n");
+  #endif
   chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
   CLEAR_CURRENT_INUSE(chunk);
   if (CAN_COMBINE_PREVIOUS(chunk)) { // This order is important, since the next chunk has to have the size at the end;
@@ -544,7 +555,8 @@ void my_free(void *ptr) {
   }
   if (CAN_COMBINE_NEXT(chunk)) {
     chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
-    remove_chunk(next_chunk);
+    if (!IS_END_OF_HEAP(next_chunk))
+      remove_chunk(next_chunk);
     chunk = combine_chunks(chunk, next_chunk);
   } else {
     CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(chunk));
@@ -554,7 +566,9 @@ void my_free(void *ptr) {
   } else {
     insert_chunk(chunk);
   }
+  #ifdef DEBUG
   assert(my_check() == 0);
+  #endif
 }
 
 // realloc - Implemented simply in terms of malloc and free
@@ -584,7 +598,9 @@ void * my_realloc(void *ptr, size_t size) {
   // Release the old block.
   my_free(ptr);
 
+  #ifdef DEBUG
   assert(my_check() == 0);
+  #endif
   // Return a pointer to the new block.
   return newptr;
 }

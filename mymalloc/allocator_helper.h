@@ -29,7 +29,7 @@ typedef uint64_t size_int;
 #define SMALLEST_CHUNK (SMALLEST_MALLOC + sizeof(size_int))
 
 #define USER_POINTER_TO_CHUNK(ptr) ((struct small_chunk*) (((uint64_t) (ptr)) - 2*sizeof(size_int)))
-#define CHUNK_TO_USER_POINTER(chunk_ptr) ((void*) &(ptr)->next)
+#define CHUNK_TO_USER_POINTER(chunk_ptr) ((void*) chunk_ptr + 2*sizeof(size_int))
 
 #define PREVIOUS_HEAP_CHUNK(chunk_ptr) ((struct small_chunk*) \
               (((uint64_t) (chunk_ptr)) - SAFE_SIZE((chunk_ptr)->previous_size) - sizeof(size_int)))

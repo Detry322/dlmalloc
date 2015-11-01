@@ -49,6 +49,10 @@ else
   CFLAGS += -g -DNDEBUG -O3
 endif
 
+ifeq ($(VERBOSE),1)
+	CFLAGS += -DVERBOSE
+endif
+
 CFLAGS += $(OTHER_CFLAGS)
 
 # You shouldn't need to touch this.  This keeps track of whether or
