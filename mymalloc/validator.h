@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -39,10 +40,8 @@ typedef struct range_t {
   struct range_t *next;  // next list element
 } range_t;
 
-static inline int ranges_overlap(range_t *r1, range_t *r2) {
-  if (r2->lo > r1->hi || r1->lo > r2->hi) 
-    return 1;
-  return 0;
+static inline bool do_ranges_overlap(range_t *r1, range_t *r2) {
+  return !(r2->lo > r1->hi || r1->lo > r2->hi);
 }
 
 // The following routines manipulate the range list, which keeps
@@ -58,10 +57,6 @@ static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
     int size, int tracenum, int opnum) {
   char *hi = lo + size - 1;
   range_t *p = NULL;
-  range_t *pnext;
-  struct range_t *new_range = (struct range_t*) malloc(sizeof(struct range_t));
-  new_range->lo = lo;
-  new_range->hi = hi;
 
   // You can use this as a buffer for writing messages with sprintf.
   // char msg[MAXLINE];
@@ -80,15 +75,17 @@ static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
     return 0;
   
   // The payload must not overlap any other payloads
-  for (p = *ranges; p != NULL; p = pnext) {
-    pnext = p->next;
-    assert(!ranges_overlap(p, new_range));
-    if (ranges_overlap(p, new_range))
+  for (p = *ranges; p != NULL; p = p->next) {
+    assert(lo > p->hi || p->lo > hi);
+    if (!(lo > p->hi || p->lo > hi))
       return 0;
   }
 
   // Everything looks OK, so remember the extent of this block by creating a
   // range struct and adding it to the range list.
+  struct range_t *new_range = (struct range_t*) malloc(sizeof(struct range_t));
+  new_range->lo = lo;
+  new_range->hi = hi;
   new_range->next = *ranges;
   *ranges = new_range;
   return 1;
@@ -96,19 +93,22 @@ static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
 
 // remove_range - Free the range record of block whose payload starts at lo
 static void remove_range(range_t **ranges, char *lo) {
-  range_t *p = NULL;
-  range_t *pnext;
-  range_t *prevpp = *ranges;
+  range_t *p;
+  range_t *prevpp = NULL;
 
   // Iterate the linked list until you find the range with a matching lo
   // payload and remove it.  Remember to properly handle the case where the
   // payload is in the first node, and to free the node after unlinking it.
-  for (p = *ranges; p != NULL; p = pnext) {
-    pnext = p->next;
+  for (p = *ranges; p != NULL; p = p->next) {
     if (p->lo == lo) {
-      prevpp->next = pnext;
+      if (!prevpp) { //payload was in first node
+        *ranges = p->next;
+      }
+      else {
+        prevpp->next = p->next;
+      }
       free(p);
-      break;  
+      break;
     }
     prevpp = p;
   }
