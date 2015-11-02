@@ -60,6 +60,8 @@ typedef uint64_t size_int;
 #define VICTIM_BIN (bins[1])
 #define HUGE_BIN (bins[2])
 
+#define IS_VICTIM(chunk_ptr) ((chunk_ptr) == VICTIM_BIN)
+
 //size refers to the size of the chunk, not the malloc.
 struct small_chunk {
   size_int previous_size; //Only valid if the PREVIOUS_INUSE bit is not set

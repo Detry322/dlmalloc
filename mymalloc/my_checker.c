@@ -41,7 +41,6 @@ bool chunk_not_in_tree(bigchunk_t* root, bigchunk_t* chunk) {
     return true;
   if (root == chunk)
     return false;
-  bool not_in_section = true;
   bigchunk_t* current = root->next;
   while (current != root) {
     if (current == chunk)
@@ -120,7 +119,7 @@ int my_checker(chunk_t** bins, int length) {
 
     assert(chunk == USER_POINTER_TO_CHUNK(CHUNK_TO_USER_POINTER(chunk)));
     chunks++;
-    if (chunk != VICTIM_BIN && !IS_CURRENT_INUSE(chunk)) {
+    if (!IS_VICTIM(chunk) && !IS_CURRENT_INUSE(chunk)) {
       assert(is_circularly_linked_list(chunk));
       if (IS_LARGE_CHUNK(chunk) && !IS_HUGE_CHUNK(chunk)) {
         assert(IS_VALID_LARGE_CHUNK((bigchunk_t*)chunk));

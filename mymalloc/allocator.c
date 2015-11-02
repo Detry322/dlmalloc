@@ -81,7 +81,12 @@ static chunk_t* small_malloc(size_int request);
 static chunk_t* large_malloc(size_int request);
 static chunk_t* end_of_heap_malloc(size_int request);
 static chunk_t* combine_chunks(chunk_t* left, chunk_t* right);
-
+static bigchunk_t* find_replacement_for_large_chunk(bigchunk_t* chunk);
+static int remove_large_single_chunk(bigchunk_t* chunk);
+static int remove_large_linked_list_chunk(bigchunk_t* chunk);
+static chunk_t* huge_malloc(size_int request);
+static int remove_huge_chunk(bigchunk_t* chunk);
+static int insert_huge_chunk(bigchunk_t* chunk);
 
 // [END STATIC METHOD DECLARATIONS]
 /* ------------------------------------------------------------------------- */
@@ -97,7 +102,7 @@ int my_check() {
 // bat by sbrk
 
 #ifndef INITIAL_CHUNK_SIZE
-#define INITIAL_CHUNK_SIZE (8192)
+#define INITIAL_CHUNK_SIZE (32768)
 #endif
 
 int my_init() {
@@ -141,9 +146,117 @@ static inline bin_index large_request_index(size_int request) {
 /* ------------------------------------------------------------------------- */
 
 /* ------------------------------------------------------------------------- */
+
+static inline void link_chunk_with_parent(bigchunk_t* chunk, bigchunk_t* new_child) {
+  assert(chunk->parent != new_child);
+  assert(chunk->parent != NULL);
+  if (chunk->parent == NO_PARENT_ROOT_NODE) {
+    bin_index n = large_request_index(CHUNK_SIZE(chunk));
+    bins[n] = new_child;
+  } else {
+    if (chunk->parent->children[0] == chunk)
+      chunk->parent->children[0] = new_child;
+    else if (chunk->parent->children[1] == chunk)
+      chunk->parent->children[1] = new_child;
+    else
+      assert(false);
+    assert((chunk->parent->children[0] != chunk) && (chunk->parent->children[1] != chunk));
+    if (new_child != NULL)
+      assert((chunk->parent->children[0] == new_child) ^ (chunk->parent->children[1] == new_child));
+  }
+  if (new_child != NULL)
+    new_child->parent = chunk->parent;
+  chunk->parent = NULL;
+}
+
+static inline void link_children_with_parent(bigchunk_t* chunk, bigchunk_t* replacement) {
+  replacement->children[0] = chunk->children[0];
+  replacement->children[1] = chunk->children[1];
+  if (replacement->children[0] != NULL)
+    replacement->children[0]->parent = replacement;
+  if (replacement->children[1] != NULL)
+    replacement->children[1]->parent = replacement;
+}
+
+static bigchunk_t* find_replacement_for_large_chunk(bigchunk_t* chunk) {
+  assert(IS_LARGE_CHUNK(chunk) && !IS_HUGE_CHUNK(chunk));
+  // First, go down the left side
+  bigchunk_t* current = chunk->children[0];
+  // "If it has at least one child, go to that child"
+  while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
+    current = (current->children[1] != NULL) ? current->children[1] : current->children[0];
+  }
+  // If we didn't find anything, go down right side
+  if (current == NULL) {
+    current = chunk->children[1];
+    while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
+      current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
+    }
+  }
+  bigchunk_t* replacement = current;
+  if (replacement != NULL)
+    link_chunk_with_parent(replacement, NULL);
+  assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
+  assert(replacement != chunk);
+  return replacement;
+}
+
+static int remove_large_single_chunk(bigchunk_t* chunk) {
+  assert(IS_LARGE_CHUNK(chunk) && !IS_HUGE_CHUNK(chunk));
+  bigchunk_t* replacement = find_replacement_for_large_chunk(chunk);
+  // A null replacement means that none was found
+  if (replacement == NULL) {
+    link_chunk_with_parent(chunk, NULL);
+    return 1;
+  } else {
+    assert(replacement->parent == NULL);
+    //First, prepare the replacement and it's peers
+    assert(replacement->bin_number == chunk->bin_number);
+    assert(replacement->shift < chunk->shift);
+    replacement->shift = chunk->shift;
+    bigchunk_t* current = replacement->next;
+    while (current != replacement) {
+      current->shift = chunk->shift;
+      current = current->next;
+    }
+    replacement->parent = chunk->parent;
+    link_children_with_parent(chunk, replacement);
+    link_chunk_with_parent(chunk, replacement);
+    assert(chunk->parent == NULL);
+    assert(replacement->parent != NULL);
+  }
+}
+
+static int remove_large_linked_list_chunk(bigchunk_t* chunk) {
+  assert(IS_LARGE_CHUNK(chunk) && !IS_HUGE_CHUNK(chunk));
+  assert(!CIRCULAR_LIST_IS_LENGTH_ONE(chunk));
+  bigchunk_t* replacement = chunk->next;
+  replacement->prev = chunk->prev;
+  chunk->prev->next = replacement;
+  if (chunk->parent != NULL) {
+    assert(replacement->parent == NULL);
+    link_children_with_parent(chunk, replacement);
+    link_chunk_with_parent(chunk, replacement);
+    assert(chunk->parent == NULL);
+    assert(replacement->parent != NULL);
+  }
+}
 // [START CHUNK INSERT/REMOVE METHODS]
 // Below lies the methods to insert and remove chunks from their respective bins
 // There are different methods for large and small chunks
+
+static int remove_huge_chunk(bigchunk_t* chunk) {
+  if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
+    HUGE_BIN = NULL;
+    return 1;
+  }
+  if (HUGE_BIN == chunk)
+    HUGE_BIN = chunk->next;
+  chunk->next->prev = chunk->prev;
+  chunk->prev->next = chunk->next;
+  chunk->next = chunk->prev = NULL;
+  return 0;
+}
 
 // Pseudocode - If this chunk is in a circularly linked list of length > 1
 // unlink the node from the linked list and if this node has a parent, set the
@@ -160,79 +273,25 @@ static inline bin_index large_request_index(size_int request) {
 static int remove_large_chunk(bigchunk_t* chunk) {
   assert(IS_LARGE_CHUNK(chunk));
   if (IS_HUGE_CHUNK(chunk)) {
-    assert(1 == 0);
-    // TODO
-    printf("remove: huge chunk not done yet...\n");
-    exit(1);
+    return remove_huge_chunk(chunk);
   }
   size_int size = CHUNK_SIZE(chunk);
   bin_index n = large_request_index(size);
   assert(is_valid_pointer_tree(n, bins[n]));
-  bigchunk_t* replacement;
   if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
-    bigchunk_t* current;
-    // First, go down the left side
-    current = chunk->children[0];
-    // "If it has at least one child, go to that child"
-    while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
-      current = (current->children[1] != NULL) ? current->children[1] : current->children[0];
-    }
-    // If we didn't find anything, go down right side
-    if (current == NULL) {
-      current = chunk->children[1];
-      while (current != NULL && (current->children[0] != NULL || current->children[1] != NULL)) {
-        current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
-      }
-    }
-    replacement = current;
-    assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
+    assert(chunk->parent != NULL);
+    remove_large_single_chunk(chunk);
   } else {
-    chunk->prev->next = chunk->next;
-    chunk->next->prev = chunk->prev;
-    replacement = chunk->next;
-    assert(replacement != chunk);
-    assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
-  }
-  assert(replacement != chunk);
-  if (replacement != NULL) {
-    if (replacement->parent == NO_PARENT_CIRCLE_NODE) {
-      replacement->parent = chunk->parent;
-      replacement->children[0] = chunk->children[0];
-      replacement->children[1] = chunk->children[1];
-      if (replacement->children[0] != NULL)
-        replacement->children[0]->parent = replacement;
-      if (replacement->children[1] != NULL)
-        replacement->children[1]->parent = replacement;
-    }
-    replacement->shift = chunk->shift;
-    bigchunk_t* next = replacement->next;
-    while (next != replacement) { // potentially very slow
-      next->shift = chunk->shift;
-      next = next->next;
-    }
-    assert(!CONTAINS_TREE_LOOPS(replacement));
-  }
-  if (chunk->parent == NO_PARENT_ROOT_NODE) {
-    bins[n] = (chunk_t*) replacement;
-  } else if (chunk->parent != NULL) {
-    chunk->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
-    assert(replacement == NULL || chunk->parent->bin_number == replacement->bin_number);
+    remove_large_linked_list_chunk(chunk);
   }
   assert(chunk_not_in_tree(bins[n], chunk));
-  assert(is_valid_pointer_tree(n, bins[n]));
-  assert(chunk->next->bin_number == chunk->bin_number && chunk->prev->bin_number == chunk->bin_number);
-  assert(is_valid_pointer_tree(n, bins[n]));
-  assert(replacement == NULL || replacement->bin_number == chunk->bin_number);
-  assert(is_valid_pointer_tree(n, bins[n]));
-  assert(is_valid_pointer_tree(n, bins[n]));
-  assert(replacement == NULL || n == replacement->bin_number);
-  assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
-  // Clear out values for caller.
-  assert(chunk_not_in_tree(bins[n], chunk));
-  assert(is_valid_pointer_tree(n, bins[n]));
-  chunk->next = chunk->prev = chunk->parent = chunk->children[0] = chunk->children[1] = NULL;
-  chunk->bin_number = chunk->shift = 0;
-  assert(chunk_not_in_tree(bins[n], chunk));
+  chunk->next = NULL; // Clear out the chunk for future use.
+  chunk->prev = NULL;
+  chunk->parent = NULL;
+  chunk->children[0] = NULL;
+  chunk->children[1] = NULL;
+  chunk->bin_number = 0;
+  chunk->shift = 0;
   assert(is_valid_pointer_tree(n, bins[n]));
   return 0;
 }
@@ -277,13 +336,26 @@ static int remove_chunk(chunk_t* chunk) {
 // right pointers of the linked list to yourself. Return 1.
 // As you're traversing down the list, the "shift" field should be 1 less than it's parent.
 
+static int insert_huge_chunk(bigchunk_t* chunk) {
+  int result = 0;
+  if (HUGE_BIN == NULL) {
+    chunk->next = chunk;
+    chunk->prev = chunk;
+    result = 1;
+  } else {
+    chunk->next = HUGE_BIN;
+    chunk->prev = HUGE_BIN->prev;
+    chunk->prev->next = chunk;
+    chunk->next->prev = chunk;
+  }
+  HUGE_BIN = chunk;
+  return result;
+}
+
 static int insert_large_chunk(bigchunk_t* chunk) {
   assert(IS_LARGE_CHUNK(chunk));
   if (IS_HUGE_CHUNK(chunk)) {
-    assert(1 == 0);
-    // TODO
-    printf("insert: huge chunk not done yet...\n");
-    exit(1);
+    return insert_huge_chunk(chunk);
   }
   chunk->next = chunk->prev = chunk->parent = chunk->children[0] = chunk->children[1] = NULL;
   chunk->bin_number = chunk->shift = 0;
@@ -427,16 +499,7 @@ static chunk_t* small_malloc(size_int request) {
 }
 
 
-// Pseudocode - First go to the index that would service the request. If there no free chunk that works,
-// take the smallest chunk from the next bin (optional?). If either of these work, split it and set the remainder to
-// the victim chunk (and add the victim chunk if it exists to a bin). Otherwise return NULL.
-static chunk_t* large_malloc(size_int request) {
-  if (IS_HUGE_SIZE(request)) {
-    assert(1 == 0);
-    // TODO
-    printf("malloc: huge chunk not done yet...\n");
-    exit(1);
-  }
+static bigchunk_t* find_best_chunk(size_int request) {
   bin_index n = large_request_index(request);
   bigchunk_t* best_chunk = NULL;
   size_int best_size = 2*request; // Guaranteted to not be in this bin.
@@ -468,6 +531,39 @@ static chunk_t* large_malloc(size_int request) {
       current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
     }
   }
+  return best_chunk;
+}
+
+static chunk_t* huge_malloc(size_int request) {
+  chunk_t* start = HUGE_BIN;
+  chunk_t* current = start;
+  if (start == NULL)
+    return NULL;
+  chunk_t* best_fit = NULL;
+  size_int best_size = ~0;
+  do {
+    if (CHUNK_SIZE(current) >= request && CHUNK_SIZE(current) < best_size) {
+      best_fit = current;
+      best_size = CHUNK_SIZE(current);
+      if (best_size == request)
+        break;
+    }
+    current = current->next;
+  } while (current != start);
+  if (best_fit != NULL)
+    remove_huge_chunk(best_fit);
+  return best_fit;
+}
+
+// Pseudocode - First go to the index that would service the request. If there no free chunk that works,
+// take the smallest chunk from the next bin (optional?). If either of these work, split it and set the remainder to
+// the victim chunk (and add the victim chunk if it exists to a bin). Otherwise return NULL.
+static chunk_t* large_malloc(size_int request) {
+  if (IS_HUGE_SIZE(request)) {
+    return huge_malloc(request);
+  }
+  bin_index n = large_request_index(request);
+  bigchunk_t* best_chunk = find_best_chunk(request);
   if (best_chunk == NULL)
     return NULL;
   remove_large_chunk(best_chunk);
@@ -491,9 +587,9 @@ static chunk_t* large_malloc(size_int request) {
 static chunk_t* end_of_heap_malloc(size_int request) {
   if (!CAN_SPLIT_CHUNK(END_OF_HEAP_BIN, request)) {
     void* new = mem_sbrk(request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE);
-    END_OF_HEAP_BIN->current_size += request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE;
-    if (new == NULL)
+    if (new == (void *)-1)
       return NULL;
+    END_OF_HEAP_BIN->current_size += request - CHUNK_SIZE(END_OF_HEAP_BIN) + EXTENSION_SIZE;
   }
   chunk_t* result = END_OF_HEAP_BIN;
   END_OF_HEAP_BIN = split_chunk(END_OF_HEAP_BIN, request);
@@ -528,13 +624,14 @@ void * my_malloc(size_t size) {
   if (result != NULL) {
     SET_CURRENT_INUSE(result);
     SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(result));
+    #ifdef DEBUG
+    assert(my_check() == 0);
+    result->next = result->prev = NULL;
+    assert(CHUNK_SIZE(result) >= size);
+    #endif
+    return CHUNK_TO_USER_POINTER(result);
   }
-  #ifdef DEBUG
-  result->next = result->prev = NULL;
-  assert(my_check() == 0);
-  assert(CHUNK_SIZE(result) >= size);
-  #endif
-  return CHUNK_TO_USER_POINTER(result);
+  return NULL;
 }
 // [END MALLOC METHODS]
 /* ------------------------------------------------------------------------- */
@@ -542,7 +639,7 @@ void * my_malloc(size_t size) {
 #define COMBINED_SIZES(chunk_ptr_left, chunk_ptr_right) \
     (SAFE_SIZE((chunk_ptr_left)->current_size) + SAFE_SIZE((chunk_ptr_right)->current_size) + sizeof(size_int))
 #define CAN_COMBINE_PREVIOUS(chunk_ptr) (IS_PREVIOUS_FREE(chunk_ptr))
-#define CAN_COMBINE_NEXT(chunk_ptr) (!IS_END_OF_HEAP(chunk_ptr) && IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk_ptr)))
+#define CAN_COMBINE_NEXT(chunk_ptr) (!(IS_END_OF_HEAP(chunk_ptr)) && IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk_ptr)))
 
 
 // Combines two chunks together to form a single larger chunk. Assumes
@@ -583,7 +680,14 @@ Otherwise, insert this new chunk into the corresponding bin.
 Finally, clear the PREVIOUS_INUSE bit of the next chunk, and write the previous_size of the next chunk.
 */
 
+static int i = 0;
 void my_free(void *ptr) {
+  i++;
+  if (i == 1967) {
+    int j = 0;
+    j++;
+    j--;
+  }
   #ifdef VERBOSE
   printf("============================ Free ============================\n");
   #endif
@@ -594,13 +698,20 @@ void my_free(void *ptr) {
   NEXT_HEAP_CHUNK(chunk)->previous_size = CHUNK_SIZE(chunk);
   if (CAN_COMBINE_PREVIOUS(chunk)) { // This order is important, since the next chunk has to have the size at the end;
     chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
-    remove_chunk(prev_chunk);
+    if (prev_chunk == VICTIM_BIN)
+      VICTIM_BIN = NULL;
+    else
+      remove_chunk(prev_chunk);
     chunk = combine_chunks(prev_chunk, chunk);
   }
   if (CAN_COMBINE_NEXT(chunk)) {
     chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
-    if (!IS_END_OF_HEAP(next_chunk))
+    if (!IS_END_OF_HEAP(next_chunk) && IS_LARGE_CHUNK(next_chunk) && !IS_HUGE_CHUNK(next_chunk) && !IS_VICTIM(next_chunk))
+      assert(IS_VALID_LARGE_CHUNK((bigchunk_t*)next_chunk));
+    if (!IS_END_OF_HEAP(next_chunk) && !IS_VICTIM(next_chunk))
       remove_chunk(next_chunk);
+    if (next_chunk == VICTIM_BIN)
+      VICTIM_BIN = NULL;
     chunk = combine_chunks(chunk, next_chunk);
   }
   if (IS_END_OF_HEAP(chunk)) {
