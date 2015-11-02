@@ -200,9 +200,9 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
         if (size < oldsize)
           oldsize = size;
 
-        for (size_t *writer = (size_t*)oldp; writer < (size_t*)((char*)oldp + oldsize); writer++) {
-          assert(*writer == (size_t)((char*)writer - oldp));
-          if (*writer != (size_t)((char*)writer - oldp))
+        for (size_t *writer = (size_t*)newp; writer < (size_t*)((char*)newp + oldsize); writer++) {
+          assert(*writer == (size_t)((char*)writer - newp));
+          if (*writer != (size_t)((char*)writer - newp))
             return 0;
         }
 
