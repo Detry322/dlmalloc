@@ -870,7 +870,26 @@ static void* realloc_chunk_before_and_after(void* ptr, size_int request) {
 }
 
 static void* realloc_chunk_after_extend_heap(void* ptr, size_int request) {
-  return NULL;
+  chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
+  assert(IS_CURRENT_INUSE(chunk));
+  assert(IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk)));
+  assert(IS_END_OF_HEAP(NEXT_HEAP_CHUNK(chunk)));
+  chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
+  size_int new_size = COMBINED_SIZES(chunk, next_chunk);
+  if (request + SMALLEST_CHUNK > new_size) {
+    size_int difference = request + SMALLEST_CHUNK + EXTENSION_SIZE - new_size;
+    void* newptr = mem_sbrk(difference);
+    if (newptr == (void*) -1)
+      return NULL;
+    next_chunk->current_size += difference;
+    new_size += difference;
+  }
+  END_OF_HEAP_BIN = NULL;
+  chunk->current_size = new_size | IS_PREVIOUS_INUSE(chunk) | CURRENT_CHUNK_INUSE;
+  chunk_t* splitted_chunk = split_mallocd_chunk(chunk, request);
+  SET_PREVIOUS_INUSE(splitted_chunk);
+  END_OF_HEAP_BIN = splitted_chunk;
+  return CHUNK_TO_USER_POINTER(chunk);
 }
 
 static void* realloc_chunk_is_larger(void* ptr, size_int request) {
@@ -888,6 +907,7 @@ static void* realloc_chunk_is_larger(void* ptr, size_int request) {
     result = realloc_chunk_and_before(ptr, request);
     if (result != NULL)
       return result;
+  // Optionally add case here for better utilization
   if (CAN_COMBINE_NEXT(chunk) && IS_END_OF_HEAP(NEXT_HEAP_CHUNK(chunk)))
     result = realloc_chunk_after_extend_heap(ptr, request); // should never return null
     if (result != NULL)
