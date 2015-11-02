@@ -167,6 +167,7 @@ static int remove_large_chunk(bigchunk_t* chunk) {
   }
   size_int size = CHUNK_SIZE(chunk);
   bin_index n = large_request_index(size);
+  assert(is_valid_pointer_tree(n, bins[n]));
   bigchunk_t* replacement;
   if (CIRCULAR_LIST_IS_LENGTH_ONE(chunk)) {
     bigchunk_t* current;
@@ -184,34 +185,55 @@ static int remove_large_chunk(bigchunk_t* chunk) {
       }
     }
     replacement = current;
+    assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
   } else {
     chunk->prev->next = chunk->next;
     chunk->next->prev = chunk->prev;
-    chunk->next = chunk->prev = NULL;
     replacement = chunk->next;
+    assert(replacement != chunk);
+    assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
   }
+  assert(replacement != chunk);
   if (replacement != NULL) {
-    replacement->parent = chunk->parent;
-    replacement->children[0] = chunk->children[0];
-    replacement->children[1] = chunk->children[1];
-    if (replacement->children[0] != NULL)
-      replacement->children[0]->parent = replacement;
-    if (replacement->children[1] != NULL)
-      replacement->children[1]->parent = replacement;
+    if (replacement->parent == NO_PARENT_CIRCLE_NODE) {
+      replacement->parent = chunk->parent;
+      replacement->children[0] = chunk->children[0];
+      replacement->children[1] = chunk->children[1];
+      if (replacement->children[0] != NULL)
+        replacement->children[0]->parent = replacement;
+      if (replacement->children[1] != NULL)
+        replacement->children[1]->parent = replacement;
+    }
     replacement->shift = chunk->shift;
     bigchunk_t* next = replacement->next;
     while (next != replacement) { // potentially very slow
       next->shift = chunk->shift;
       next = next->next;
     }
+    assert(!CONTAINS_TREE_LOOPS(replacement));
   }
   if (chunk->parent == NO_PARENT_ROOT_NODE) {
     bins[n] = (chunk_t*) replacement;
   } else if (chunk->parent != NULL) {
     chunk->parent->children[(size >> chunk->parent->shift) & 1] = replacement;
+    assert(replacement == NULL || chunk->parent->bin_number == replacement->bin_number);
   }
-  chunk->next = chunk->prev = NULL;
+  assert(chunk_not_in_tree(bins[n], chunk));
+  assert(is_valid_pointer_tree(n, bins[n]));
+  assert(chunk->next->bin_number == chunk->bin_number && chunk->prev->bin_number == chunk->bin_number);
+  assert(is_valid_pointer_tree(n, bins[n]));
+  assert(replacement == NULL || replacement->bin_number == chunk->bin_number);
+  assert(is_valid_pointer_tree(n, bins[n]));
+  assert(is_valid_pointer_tree(n, bins[n]));
   assert(replacement == NULL || n == replacement->bin_number);
+  assert(replacement == NULL || !CONTAINS_TREE_LOOPS(replacement));
+  // Clear out values for caller.
+  assert(chunk_not_in_tree(bins[n], chunk));
+  assert(is_valid_pointer_tree(n, bins[n]));
+  chunk->next = chunk->prev = chunk->parent = chunk->children[0] = chunk->children[1] = NULL;
+  chunk->bin_number = chunk->shift = 0;
+  assert(chunk_not_in_tree(bins[n], chunk));
+  assert(is_valid_pointer_tree(n, bins[n]));
   return 0;
 }
 
@@ -263,10 +285,12 @@ static int insert_large_chunk(bigchunk_t* chunk) {
     printf("insert: huge chunk not done yet...\n");
     exit(1);
   }
+  chunk->next = chunk->prev = chunk->parent = chunk->children[0] = chunk->children[1] = NULL;
+  chunk->bin_number = chunk->shift = 0;
+  // Clear out old (potentially unsafe) values.
   bin_index n = large_request_index(CHUNK_SIZE(chunk));
+  assert(is_valid_pointer_tree(n, bins[n]));
   chunk->bin_number = n;
-  chunk->children[0] = NULL;
-  chunk->children[1] = NULL;
   bigchunk_t* parent = NO_PARENT_ROOT_NODE;
   bigchunk_t* current = (bigchunk_t*) bins[n];
   size_int size = CHUNK_SIZE(chunk);
@@ -278,6 +302,12 @@ static int insert_large_chunk(bigchunk_t* chunk) {
       chunk->prev = current->prev;
       current->prev->next = chunk;
       current->prev = chunk;
+      assert(current->bin_number == chunk->bin_number);
+      assert(chunk->bin_number == n);
+      assert(!CONTAINS_TREE_LOOPS(chunk));
+      assert(chunk->next->bin_number == chunk->bin_number && chunk->prev->bin_number == chunk->bin_number);
+      assert(is_valid_pointer_tree(n, bins[n]));
+      assert(chunk_in_tree(bins[n], chunk));
       return 0;
     }
     parent = current;
@@ -299,7 +329,11 @@ static int insert_large_chunk(bigchunk_t* chunk) {
   }
   chunk->next = chunk;
   chunk->prev = chunk;
+  assert(chunk->next->bin_number == chunk->bin_number && chunk->prev->bin_number == chunk->bin_number);
+  assert(!CONTAINS_TREE_LOOPS(chunk));
   assert(n == chunk->bin_number);
+  assert(is_valid_pointer_tree(n, bins[n]));
+  assert(chunk_in_tree(bins[n], chunk));
   return result;
 }
 
@@ -437,6 +471,8 @@ static chunk_t* large_malloc(size_int request) {
   if (best_chunk == NULL)
     return NULL;
   remove_large_chunk(best_chunk);
+  assert(chunk_not_in_tree(bins[n], best_chunk));
+  assert(n > 62 || chunk_not_in_tree(bins[n], best_chunk));
   if (CAN_SPLIT_CHUNK(best_chunk, request)) {
     if (VICTIM_BIN != NULL)
       insert_chunk(VICTIM_BIN);
@@ -496,6 +532,7 @@ void * my_malloc(size_t size) {
   #ifdef DEBUG
   result->next = result->prev = NULL;
   assert(my_check() == 0);
+  assert(CHUNK_SIZE(result) >= size);
   #endif
   return CHUNK_TO_USER_POINTER(result);
 }

@@ -95,6 +95,12 @@ struct large_chunk {
     ((chunk_ptr)->parent->children[(CHUNK_SIZE(chunk_ptr) >> (chunk_ptr)->parent->shift) & 1] == (chunk_ptr)) \
     ))
 
+#define CONTAINS_TREE_LOOPS(chunk_ptr) \
+  ((chunk_ptr)->parent == (chunk_ptr) || (chunk_ptr) == (chunk_ptr)->children[1] || \
+    (chunk_ptr) == (chunk_ptr)->children[0] || ((chunk_ptr)->children[1] == (chunk_ptr)->children[0] && \
+        (chunk_ptr)->children[0] != NULL))
+
+
 #define IS_VALID_SMALL_CHUNK(chunk_ptr) \
   (IS_CURRENT_FREE(chunk_ptr) && (chunk_ptr)->next != NULL && (chunk_ptr)->prev != NULL)
 

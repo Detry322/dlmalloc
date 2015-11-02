@@ -36,10 +36,43 @@ bool is_valid_chunk_pointer(chunk_t* chunk) {
   }
 }
 
+bool chunk_not_in_tree(bigchunk_t* root, bigchunk_t* chunk) {
+  if (root == NULL)
+    return true;
+  if (root == chunk)
+    return false;
+  bool not_in_section = true;
+  bigchunk_t* current = root->next;
+  while (current != root) {
+    if (current == chunk)
+      return false;
+    current = current->next;
+  }
+  return chunk_not_in_tree(root->children[0], chunk) && chunk_not_in_tree(root->children[1], chunk);
+}
+
+bool chunk_in_tree(bigchunk_t* root, bigchunk_t* chunk) {
+  if (root == NULL)
+    return false;
+  if (root == chunk)
+    return true;
+  bigchunk_t* current = root->next;
+  while (current != root) {
+    if (current == chunk)
+      return true;
+    current = current->next;
+  }
+  return chunk_in_tree(root->children[0], chunk) || chunk_in_tree(root->children[1], chunk);
+}
+
 bool is_valid_pointer_tree(int i, bigchunk_t* chunk) {
   if (chunk == NULL)
     return true;
+  assert(IS_VALID_LARGE_CHUNK(chunk));
   bool is_valid = true;
+  if (CONTAINS_TREE_LOOPS(chunk))
+    is_valid = false;
+  assert(is_valid);
   if (chunk->children[0] != NULL && chunk->children[0]->parent != chunk)
     is_valid = false;
   assert(is_valid);
