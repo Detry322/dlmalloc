@@ -815,11 +815,58 @@ static void* realloc_chunk_and_after(void* ptr, size_int request) {
 }
 
 static void* realloc_chunk_and_before(void* ptr, size_int request) {
-  return NULL;
+  chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
+  assert(IS_PREVIOUS_FREE(chunk));
+  assert(IS_CURRENT_INUSE(chunk));
+  assert(IS_CURRENT_INUSE(NEXT_HEAP_CHUNK(chunk)));
+  chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
+  if (COMBINED_SIZES(prev_chunk, chunk) < request)
+    return NULL;
+  if (prev_chunk == VICTIM_BIN)
+    VICTIM_BIN = NULL;
+  else
+    remove_chunk(prev_chunk);
+  size_int new_size = COMBINED_SIZES(prev_chunk, chunk);
+  prev_chunk->current_size = new_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
+  memcpy(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
+  if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
+    chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
+    insert_chunk(splitted_chunk);
+    SET_PREVIOUS_INUSE(splitted_chunk);
+    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
+    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
+  }
+  return CHUNK_TO_USER_POINTER(prev_chunk);
 }
 
 static void* realloc_chunk_before_and_after(void* ptr, size_int request) {
-  return NULL;
+  chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
+  assert(IS_PREVIOUS_FREE(chunk));
+  assert(IS_CURRENT_INUSE(chunk));
+  assert(IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk)));
+  chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
+  chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
+  size_int total_size = CHUNK_SIZE(chunk) + CHUNK_SIZE(prev_chunk) + CHUNK_SIZE(next_chunk) + 2*sizeof(size_int);
+  if (total_size < request || IS_END_OF_HEAP(next_chunk))
+    return NULL;
+  if (prev_chunk == VICTIM_BIN)
+    VICTIM_BIN = NULL;
+  else
+    remove_chunk(prev_chunk);
+  if (next_chunk == VICTIM_BIN)
+    VICTIM_BIN = NULL;
+  else
+    remove_chunk(next_chunk);
+  prev_chunk->current_size = total_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
+  memcpy(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
+  if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
+    chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
+    insert_chunk(splitted_chunk);
+    SET_PREVIOUS_INUSE(splitted_chunk);
+    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
+    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
+  }
+  return CHUNK_TO_USER_POINTER(prev_chunk);
 }
 
 static void* realloc_chunk_after_extend_heap(void* ptr, size_int request) {
@@ -833,12 +880,12 @@ static void* realloc_chunk_is_larger(void* ptr, size_int request) {
     result = realloc_chunk_and_after(ptr, request);
     if (result != NULL)
       return result;
-  if (CAN_COMBINE_PREVIOUS(chunk))
-    result = realloc_chunk_and_before(ptr, request);
-    if (result != NULL)
-      return result;
   if (CAN_COMBINE_PREVIOUS(chunk) && CAN_COMBINE_NEXT(chunk))
     result = realloc_chunk_before_and_after(ptr, request);
+    if (result != NULL)
+      return result;
+  if (CAN_COMBINE_PREVIOUS(chunk))
+    result = realloc_chunk_and_before(ptr, request);
     if (result != NULL)
       return result;
   if (CAN_COMBINE_NEXT(chunk) && IS_END_OF_HEAP(NEXT_HEAP_CHUNK(chunk)))
