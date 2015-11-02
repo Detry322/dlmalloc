@@ -28,6 +28,7 @@
 #else
 #define IS_ALIGNED(p)  ((((uint32_t)(p)) % R_ALIGNMENT) == 0)
 #endif
+#define MOD (0xFF)
 
 // Range list data structure
 
@@ -37,6 +38,12 @@ typedef struct range_t {
   char *hi;              // high payload address
   struct range_t *next;  // next list element
 } range_t;
+
+static inline int ranges_overlap(range_t *r1, range_t *r2) {
+  if (r2->lo > r1->hi || r1->lo > r2->hi) 
+    return 1;
+  return 0;
+}
 
 // The following routines manipulate the range list, which keeps
 // track of the extent of every allocated block payload. We use the
@@ -49,8 +56,12 @@ typedef struct range_t {
 // we create a range struct for this block and add it to the range list.
 static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
     int size, int tracenum, int opnum) {
-  //  char *hi = lo + size - 1;
-  //  range_t *p = NULL;
+  char *hi = lo + size - 1;
+  range_t *p = NULL;
+  range_t *pnext;
+  struct range_t *new_range = (struct range_t*) malloc(sizeof(struct range_t));
+  new_range->lo = lo;
+  new_range->hi = hi;
 
   // You can use this as a buffer for writing messages with sprintf.
   // char msg[MAXLINE];
@@ -58,30 +69,49 @@ static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
   assert(size > 0);
 
   // Payload addresses must be R_ALIGNMENT-byte aligned
-  // TODO(project3): YOUR CODE HERE
-
+  assert(IS_ALIGNED(lo));
+  if (!IS_ALIGNED(lo)) 
+    return 0;
+  
   // The payload must lie within the extent of the heap
-  // TODO(project3): YOUR CODE HERE
-
+  assert(hi <= (char*)mem_heap_hi());
+  assert(lo >= (char*)mem_heap_lo());
+  if (hi > (char*)mem_heap_hi() || lo < (char*)mem_heap_lo())
+    return 0;
+  
   // The payload must not overlap any other payloads
-  // TODO(project3): YOUR CODE HERE
+  for (p = *ranges; p != NULL; p = pnext) {
+    pnext = p->next;
+    assert(!ranges_overlap(p, new_range));
+    if (ranges_overlap(p, new_range))
+      return 0;
+  }
 
   // Everything looks OK, so remember the extent of this block by creating a
-  // range struct and adding it the range list.
-  // TODO(project3):  YOUR CODE HERE
-
+  // range struct and adding it to the range list.
+  new_range->next = *ranges;
+  *ranges = new_range;
   return 1;
 }
 
 // remove_range - Free the range record of block whose payload starts at lo
 static void remove_range(range_t **ranges, char *lo) {
-  //  range_t *p = NULL;
-  //  range_t **prevpp = ranges;
+  range_t *p = NULL;
+  range_t *pnext;
+  range_t *prevpp = *ranges;
 
   // Iterate the linked list until you find the range with a matching lo
   // payload and remove it.  Remember to properly handle the case where the
   // payload is in the first node, and to free the node after unlinking it.
-  // TODO(project3): YOUR CODE HERE
+  for (p = *ranges; p != NULL; p = pnext) {
+    pnext = p->next;
+    if (p->lo == lo) {
+      prevpp->next = pnext;
+      free(p);
+      break;  
+    }
+    prevpp = p;
+  }
 }
 
 // clear_ranges - free all of the range records for a trace
@@ -138,7 +168,9 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
 
         // Fill the allocated region with some unique data that you can check
         // for if the region is copied via realloc.
-        // TODO(project3): YOUR CODE HERE
+        for (size_t *writer = (size_t*)p; writer < (size_t*)((char*)p + size); writer++) {
+          *writer = (size_t)((char*)writer - p);
+        }
 
         // Remember region
         trace->blocks[index] = p;
@@ -167,7 +199,16 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
         oldsize = trace->block_sizes[index];
         if (size < oldsize)
           oldsize = size;
-        // TODO(project3): YOUR CODE HERE
+
+        for (size_t *writer = (size_t*)oldp; writer < (size_t*)((char*)oldp + oldsize); writer++) {
+          assert(*writer == (size_t)((char*)writer - oldp));
+          if (*writer != (size_t)((char*)writer - oldp))
+            return 0;
+        }
+
+        for (size_t *writer = (size_t*)newp; writer < (size_t*)((char*)newp + size); writer++) {
+          *writer = (size_t)((char*)writer - newp);
+        }
 
         // Remember region
         trace->blocks[index] = newp;
