@@ -102,7 +102,7 @@ int my_check() {
 // bat by sbrk
 
 #ifndef INITIAL_CHUNK_SIZE
-#define INITIAL_CHUNK_SIZE (32768)
+#define INITIAL_CHUNK_SIZE (36168)
 #endif
 
 int my_init() {
@@ -483,8 +483,8 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // reach the end of the small bins. If you find a free chunk, unlink it, remove it, and split. If you reach the end of
 // the bins, return NULL
 
-#define SMALL_BIN_SEARCH_MAX (16)
-#define LARGE_BIN_SEARCH_MAX (32)
+#define SMALL_BIN_SEARCH_MAX (18)
+#define LARGE_BIN_SEARCH_MAX (11)
 
 static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
@@ -656,7 +656,7 @@ static chunk_t* large_malloc(size_int request) {
 
 
 #ifndef EXTENSION_SIZE
-#define EXTENSION_SIZE (SMALLEST_CHUNK + 128)
+#define EXTENSION_SIZE (SMALLEST_CHUNK + 160)
 #endif
 
 // Pseudocode - Extend the last chunk as far as needed so it can be split into two chunks
