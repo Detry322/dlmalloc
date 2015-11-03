@@ -49,6 +49,11 @@ else
   CFLAGS += -g -DNDEBUG -O3
 endif
 
+ifeq ($(PROF),1)
+  CFLAGS += -pg
+  LDFLAGS += -pg
+endif
+
 ifeq ($(VERBOSE),1)
 	CFLAGS += -DVERBOSE
 endif
