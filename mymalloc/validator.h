@@ -65,15 +65,15 @@ static int add_range(const malloc_impl_t *impl, range_t **ranges, char *lo,
 
   // Payload addresses must be R_ALIGNMENT-byte aligned
   assert(IS_ALIGNED(lo));
-  if (!IS_ALIGNED(lo)) 
+  if (!IS_ALIGNED(lo))
     return 0;
-  
+
   // The payload must lie within the extent of the heap
   assert(hi <= (char*)mem_heap_hi());
   assert(lo >= (char*)mem_heap_lo());
   if (hi > (char*)mem_heap_hi() || lo < (char*)mem_heap_lo())
     return 0;
-  
+
   // The payload must not overlap any other payloads
   for (p = *ranges; p != NULL; p = p->next) {
     assert(lo > p->hi || p->lo > hi);
@@ -179,9 +179,9 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
           writer++;
         }
         */
-        
+
         for (size_t *writer = (size_t*)p; writer < (size_t*)((char*)p + size); writer++) {
-          *writer = (size_t)((char*)writer - p);
+          *writer = (size_t)((char*)writer - p) ^ (size_t) p;
         }
 
         // Remember region
@@ -230,16 +230,16 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
           *writer = 0;
           writer++;
         }*/
-   
-        
+
+
         for (size_t *writer = (size_t*)newp; writer < (size_t*)((char*)newp + oldsize); writer++) {
-          assert(*writer == (size_t)((char*)writer - newp));
-          if (*writer != (size_t)((char*)writer - newp))
+          assert(*writer == ((size_t)((char*)writer - newp) ^ (size_t) oldp));
+          if (*writer != ((size_t)((char*)writer - newp) ^ (size_t) oldp))
             return 0;
         }
 
         for (size_t *writer = (size_t*)newp; writer < (size_t*)((char*)newp + size); writer++) {
-          *writer = (size_t)((char*)writer - newp);
+          *writer = (size_t)((char*)writer - newp) ^ (size_t) newp;
         }
 
         // Remember region
