@@ -119,7 +119,7 @@ int my_init() {
   assert(IS_END_OF_HEAP(first_chunk));
   assert(IS_END_OF_HEAP(END_OF_HEAP_BIN));
   #ifdef DEBUG
-  assert(my_check() == 0);
+
   #endif
   return 0;
 }
@@ -484,7 +484,7 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // the bins, return NULL
 
 #define SMALL_BIN_SEARCH_MAX (32)
-#define LARGE_BIN_SEARCH_MAX (16)
+#define LARGE_BIN_SEARCH_MAX (32)
 
 static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
@@ -599,11 +599,10 @@ static bigchunk_t* find_best_chunk(size_int request) {
           }
           current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
         }
-        return best_chunk;
+        break;
       }
     }
   }
-  assert(best_chunk == NULL);
   return best_chunk;
 }
 
@@ -703,7 +702,7 @@ void * my_malloc(size_t size) {
     SET_CURRENT_INUSE(result);
     SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(result));
     #ifdef DEBUG
-    assert(my_check() == 0);
+
     result->next = result->prev = NULL;
     assert(CHUNK_SIZE(result) >= size);
     #endif
@@ -791,7 +790,7 @@ void my_free(void *ptr) {
     insert_chunk(chunk);
   }
   #ifdef DEBUG
-  assert(my_check() == 0);
+
   #endif
 }
 
@@ -824,7 +823,7 @@ static void* default_realloc(void* ptr, size_t size) {
   my_free(ptr);
 
   #ifdef DEBUG
-  assert(my_check() == 0);
+
   #endif
   // Return a pointer to the new block.
   return newptr;
@@ -975,7 +974,7 @@ static void* realloc_chunk_is_larger(void* ptr, size_int request) {
     result = realloc_chunk_before_and_after(ptr, request);
     if (result != NULL)
       return result;
-  if (CAN_COMBINE_PREVIOUS(chunk))
+  if (CAN_COMBINE_PREVIOUS(chunk) && !IS_END_OF_HEAP(NEXT_HEAP_CHUNK(chunk)))
     result = realloc_chunk_and_before(ptr, request);
     if (result != NULL)
       return result;
