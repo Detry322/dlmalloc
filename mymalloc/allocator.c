@@ -483,7 +483,7 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // reach the end of the small bins. If you find a free chunk, unlink it, remove it, and split. If you reach the end of
 // the bins, return NULL
 
-#define SMALL_BIN_SEARCH_MAX (32)
+#define SMALL_BIN_SEARCH_MAX (16)
 #define LARGE_BIN_SEARCH_MAX (32)
 
 static chunk_t* small_malloc(size_int request) {
