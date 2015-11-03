@@ -6,7 +6,7 @@ bool is_circularly_linked_list(chunk_t* chunk) {
   bool is_right_linked = false;
   bool is_left_linked = false;
   chunk_t* other = chunk->next;
-  for (int i = 0; i < 100000; i++) {
+  for (int i = 0; i < 100000000; i++) {
     if (chunk == other) {
       is_right_linked = true;
       break;
@@ -14,7 +14,7 @@ bool is_circularly_linked_list(chunk_t* chunk) {
     other = other->next;
   }
   other = chunk->prev;
-  for (int i = 0; i < 100000; i++) {
+  for (int i = 0; i < 100000000; i++) {
     if (chunk == other) {
       is_left_linked = true;
       break;

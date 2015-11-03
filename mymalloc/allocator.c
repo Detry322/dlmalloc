@@ -316,6 +316,7 @@ static int remove_small_chunk(chunk_t* chunk) {
   chunk->next->prev = chunk->prev;
   chunk->prev->next = chunk->next;
   chunk->next = chunk->prev = NULL;
+  assert(is_circularly_linked_list(bins[n]));
   return 0;
 }
 
@@ -432,6 +433,7 @@ static int insert_small_chunk(chunk_t* chunk) {
     chunk->next->prev = chunk;
   }
   bins[n] = chunk;
+  assert(is_circularly_linked_list(chunk));
   return result;
 }
 
@@ -476,12 +478,14 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // the victim chunk is large enough. Otherwise return NULL
 //
 // Updated pseudocode - First, go to the index that would service the request. If there is a free chunk there,
-// unlink it and remove it. If that doesn't work, go to the next bin. If that doesn't work, see if the victim 
-// chunk is large enough. If that doesn't work, iterate through the small bins until you find a free chunk or 
+// unlink it and remove it. If that doesn't work, go to the next bin. If that doesn't work, see if the victim
+// chunk is large enough. If that doesn't work, iterate through the small bins until you find a free chunk or
 // reach the end of the small bins. If you find a free chunk, unlink it, remove it, and split. If you reach the end of
 // the bins, return NULL
 
 #define SMALL_BIN_SEARCH_MAX (32)
+#define LARGE_BIN_SEARCH_MAX (16)
+
 static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
   chunk_t* result = bins[i];
@@ -491,8 +495,7 @@ static chunk_t* small_malloc(size_int request) {
   }
   // First bin didn't work? Try next bin
   if (i < 31) {
-    i++;
-    result = bins[i];
+    result = bins[i + 1];
     if (result != NULL) {
       remove_small_chunk(result);
       return result;
@@ -504,15 +507,16 @@ static chunk_t* small_malloc(size_int request) {
       CAN_SPLIT_CHUNK(VICTIM_BIN, request)) /* And is large enough to be split */ {
     result = VICTIM_BIN;
     VICTIM_BIN = split_chunk(VICTIM_BIN, request);
+    return result;
   } else if (VICTIM_BIN != NULL && CHUNK_SIZE(VICTIM_BIN) >= request) {
     result = VICTIM_BIN;
     VICTIM_BIN = NULL;
+    return result;
   }
+  assert(result == NULL);
   // Trying the rest of the small bins
-  /*int cutoff = 0;
-  while (i < 32 && cutoff < SMALL_BIN_SEARCH_MAX) {
-    i++;
-    result = bins[i];
+  for (int j = i + 2; j < 32 && (j - i) < SMALL_BIN_SEARCH_MAX; j++) {
+    result = bins[j];
     if (result != NULL) {
       remove_small_chunk(result);
       if (CAN_SPLIT_CHUNK(result, request)) {
@@ -522,11 +526,41 @@ static chunk_t* small_malloc(size_int request) {
       }
       return result;
     }
-  }*/
+  }
+  assert(result == NULL);
+  if (result == NULL) {
+    // check the rest of the large bins
+    int cutoff = 0;
+    int n = 31;
+    while (n < 63 && cutoff < LARGE_BIN_SEARCH_MAX) {
+      n++;
+      cutoff++;
+      if (bins[n] != NULL) {
+        // Find smallest chunk in bin;
+        bigchunk_t* current = (bigchunk_t*) bins[n];
+        bigchunk_t* best_chunk = (bigchunk_t*) bins[n];
+        size_int best_size = CHUNK_SIZE(bins[n]);
+        while (current != NULL) {
+          if (CHUNK_SIZE(current) < best_size) {
+            best_chunk = current;
+            best_size = CHUNK_SIZE(current);
+          }
+          current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
+        }
+        remove_large_chunk(best_chunk);
+        if (CAN_SPLIT_CHUNK(best_chunk, request)) {
+          if (VICTIM_BIN != NULL)
+            insert_chunk(VICTIM_BIN);
+          VICTIM_BIN = split_chunk((chunk_t*) best_chunk, request);
+        }
+        return (chunk_t*) best_chunk;
+      }
+    }
+  }
+  assert(result == NULL);
   return result;
 }
 
-#define LARGE_BIN_SEARCH_MAX (15)
 static bigchunk_t* find_best_chunk(size_int request) {
   bin_index n = large_request_index(request);
   bigchunk_t* best_chunk = NULL;
@@ -565,10 +599,11 @@ static bigchunk_t* find_best_chunk(size_int request) {
           }
           current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
         }
-        break;
+        return best_chunk;
       }
     }
   }
+  assert(best_chunk == NULL);
   return best_chunk;
 }
 
