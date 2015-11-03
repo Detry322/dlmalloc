@@ -766,6 +766,7 @@ void my_free(void *ptr) {
   CLEAR_CURRENT_INUSE(chunk);
   CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(chunk));
   NEXT_HEAP_CHUNK(chunk)->previous_size = CHUNK_SIZE(chunk);
+  bool was_end_of_heap = IS_END_OF_HEAP(chunk);
   if (CAN_COMBINE_PREVIOUS(chunk)) { // This order is important, since the next chunk has to have the size at the end;
     chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
     if (prev_chunk == VICTIM_BIN)
@@ -776,15 +777,18 @@ void my_free(void *ptr) {
   }
   if (CAN_COMBINE_NEXT(chunk)) {
     chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
-    if (!IS_END_OF_HEAP(next_chunk) && IS_LARGE_CHUNK(next_chunk) && !IS_HUGE_CHUNK(next_chunk) && !IS_VICTIM(next_chunk))
+    if (!IS_END_OF_HEAP(next_chunk) && IS_LARGE_CHUNK(next_chunk) && !IS_HUGE_CHUNK(next_chunk) && !IS_VICTIM(next_chunk)) {
       assert(IS_VALID_LARGE_CHUNK((bigchunk_t*)next_chunk));
+    }
     if (!IS_END_OF_HEAP(next_chunk) && !IS_VICTIM(next_chunk))
       remove_chunk(next_chunk);
     if (next_chunk == VICTIM_BIN)
       VICTIM_BIN = NULL;
+    if (IS_END_OF_HEAP(next_chunk))
+      was_end_of_heap = true;
     chunk = combine_chunks(chunk, next_chunk);
   }
-  if (IS_END_OF_HEAP(chunk)) {
+  if (was_end_of_heap) {
     END_OF_HEAP_BIN = chunk;
   } else {
     insert_chunk(chunk);
@@ -845,15 +849,17 @@ static void* realloc_chunk_is_smaller(void* ptr, size_t size) {
   chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
   if (CAN_SPLIT_CHUNK(chunk, size)) {
     chunk_t* splitted_chunk = split_mallocd_chunk(chunk, size);
+    bool was_end_of_heap = false;
     if (CAN_COMBINE_NEXT(splitted_chunk)) {
       chunk_t* next_chunk = NEXT_HEAP_CHUNK(splitted_chunk);
+      was_end_of_heap = IS_END_OF_HEAP(next_chunk);
       if (!IS_END_OF_HEAP(next_chunk) && !IS_VICTIM(next_chunk))
         remove_chunk(next_chunk);
       if (IS_VICTIM(next_chunk))
         VICTIM_BIN = NULL;
       splitted_chunk = combine_chunks(splitted_chunk, next_chunk);
     }
-    if (!IS_END_OF_HEAP(splitted_chunk))
+    if (!was_end_of_heap)
       insert_chunk(splitted_chunk);
     else
       END_OF_HEAP_BIN = splitted_chunk;

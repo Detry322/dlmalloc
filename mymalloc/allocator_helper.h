@@ -37,7 +37,7 @@ typedef uint64_t size_int;
 #define NEXT_HEAP_CHUNK(chunk_ptr) ((struct small_chunk*) \
               (((uint64_t) (chunk_ptr)) + SAFE_SIZE((chunk_ptr)->current_size) + sizeof(size_int)))
 
-#define IS_END_OF_HEAP(chunk_ptr) ((chunk_ptr) == USER_POINTER_TO_CHUNK(mem_heap_hi() + 1 - CHUNK_SIZE(chunk_ptr)))
+#define IS_END_OF_HEAP(chunk_ptr) ((chunk_ptr) == END_OF_HEAP_BIN)
 
 #define CIRCULAR_LIST_IS_LENGTH_ONE(chunk_ptr) ((chunk_ptr) == (chunk_ptr)->next && (chunk_ptr) == (chunk_ptr)->prev)
 
