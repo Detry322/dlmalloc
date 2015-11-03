@@ -474,6 +474,14 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // Pseudocode - First, go to the index that would service the request. If there is a free chunk there,
 // unlink it and remove it. If that don't work, go to the next bin, and if that doesn't work, see if
 // the victim chunk is large enough. Otherwise return NULL
+//
+// Updated pseudocode - First, go to the index that would service the request. If there is a free chunk there,
+// unlink it and remove it. If that doesn't work, go to the next bin. If that doesn't work, see if the victim 
+// chunk is large enough. If that doesn't work, iterate through the small bins until you find a free chunk or 
+// reach the end of the small bins. If you find a free chunk, unlink it, remove it, and split. If you reach the end of
+// the bins, return NULL
+
+#define SMALL_BIN_SEARCH_MAX (32)
 static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
   chunk_t* result = bins[i];
@@ -483,7 +491,8 @@ static chunk_t* small_malloc(size_int request) {
   }
   // First bin didn't work? Try next bin
   if (i < 31) {
-    result = bins[i+1];
+    i++;
+    result = bins[i];
     if (result != NULL) {
       remove_small_chunk(result);
       return result;
@@ -499,14 +508,29 @@ static chunk_t* small_malloc(size_int request) {
     result = VICTIM_BIN;
     VICTIM_BIN = NULL;
   }
+  // Trying the rest of the small bins
+  /*int cutoff = 0;
+  while (i < 32 && cutoff < SMALL_BIN_SEARCH_MAX) {
+    i++;
+    result = bins[i];
+    if (result != NULL) {
+      remove_small_chunk(result);
+      if (CAN_SPLIT_CHUNK(result, request)) {
+        if (VICTIM_BIN != NULL)
+          insert_chunk(VICTIM_BIN);
+        VICTIM_BIN = split_chunk(result, request);
+      }
+      return result;
+    }
+  }*/
   return result;
 }
 
-
+#define LARGE_BIN_SEARCH_MAX (15)
 static bigchunk_t* find_best_chunk(size_int request) {
   bin_index n = large_request_index(request);
   bigchunk_t* best_chunk = NULL;
-  size_int best_size = 2*request; // Guaranteted to not be in this bin.
+  size_int best_size = 2*request; // Guaranteed to not be in this bin.
   bigchunk_t* current = (bigchunk_t*) bins[n];
   while (current != NULL) {
     int decision = (request >> current->shift) & 1;
@@ -523,16 +547,26 @@ static bigchunk_t* find_best_chunk(size_int request) {
     }
     current = current->children[decision];
   }
-  if (best_chunk == NULL && n < 63 && bins[n+1] != NULL) {
-    // Find smallest chunk in next bin;
-    best_chunk = (bigchunk_t*) bins[n+1];
-    best_size = CHUNK_SIZE(bins[n+1]);
-    while (current != NULL) {
-      if (CHUNK_SIZE(current) < best_size) {
-        best_chunk = current;
-        best_size = CHUNK_SIZE(current);
+  if (best_chunk == NULL) {
+    // check the rest of the large bins
+    int cutoff = 0;
+    while (n < 64 && cutoff < LARGE_BIN_SEARCH_MAX) {
+      n++;
+      cutoff++;
+      if (bins[n] != NULL) {
+        // Find smallest chunk in bin;
+        current = (bigchunk_t*) bins[n];
+        best_chunk = (bigchunk_t*) bins[n];
+        best_size = CHUNK_SIZE(bins[n]);
+        while (current != NULL) {
+          if (CHUNK_SIZE(current) < best_size) {
+            best_chunk = current;
+            best_size = CHUNK_SIZE(current);
+          }
+          current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
+        }
+        break;
       }
-      current = (current->children[0] != NULL) ? current->children[0] : current->children[1];
     }
   }
   return best_chunk;
@@ -562,6 +596,9 @@ static chunk_t* huge_malloc(size_int request) {
 // Pseudocode - First go to the index that would service the request. If there no free chunk that works,
 // take the smallest chunk from the next bin (optional?). If either of these work, split it and set the remainder to
 // the victim chunk (and add the victim chunk if it exists to a bin). Otherwise return NULL.
+//
+// Updated - First go to the index taht would service the request. If there is no free chunk that works,
+// iterate through the rest of the large bins until y
 static chunk_t* large_malloc(size_int request) {
   if (IS_HUGE_SIZE(request)) {
     return huge_malloc(request);

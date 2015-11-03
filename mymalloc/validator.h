@@ -168,6 +168,18 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
 
         // Fill the allocated region with some unique data that you can check
         // for if the region is copied via realloc.
+        /*
+        size_t *writer = (size_t*)p;
+        *writer = (size_t)p;
+        writer++;
+        *writer = (size_t)size;
+        writer++;
+        while (writer < (size_t*)((char*)p + size)) {
+          *writer = 0;
+          writer++;
+        }
+        */
+        
         for (size_t *writer = (size_t*)p; writer < (size_t*)((char*)p + size); writer++) {
           *writer = (size_t)((char*)writer - p);
         }
@@ -199,7 +211,27 @@ int eval_mm_valid(const malloc_impl_t *impl, trace_t *trace, int tracenum) {
         oldsize = trace->block_sizes[index];
         if (size < oldsize)
           oldsize = size;
+        /*
+        *writer = (size_t*)newp;
+        assert(*writer == (size_t)oldp);
+        if (*writer != (size_t)oldp)
+          return 0;
+        writer++;
+        assert(*writer == (size_t)oldsize);
+        if (*writer == (size_t)oldsize)
+          return 0;
 
+        writer = (size_t*)newp;
+        *writer = (size_t)newp;
+        writer++;
+        *writer = (size_t)size;
+        writer++;
+        while (writer < (size_t*)((char*)newp + size)) {
+          *writer = 0;
+          writer++;
+        }*/
+   
+        
         for (size_t *writer = (size_t*)newp; writer < (size_t*)((char*)newp + oldsize); writer++) {
           assert(*writer == (size_t)((char*)writer - newp));
           if (*writer != (size_t)((char*)writer - newp))
