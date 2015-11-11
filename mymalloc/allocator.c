@@ -483,9 +483,13 @@ static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
 // reach the end of the small bins. If you find a free chunk, unlink it, remove it, and split. If you reach the end of
 // the bins, return NULL
 
+#ifndef SMALL_BIN_SEARCH_MAX
 #define SMALL_BIN_SEARCH_MAX (0)
-#define LARGE_BIN_SEARCH_MAX (16)
+#endif
 
+#ifndef LARGE_BIN_SEARCH_MAX
+#define LARGE_BIN_SEARCH_MAX (16)
+#endif
 static chunk_t* small_malloc(size_int request) {
   bin_index i = small_request_index(request);
   chunk_t* result = bins[i];
@@ -493,7 +497,6 @@ static chunk_t* small_malloc(size_int request) {
     remove_small_chunk(result);
     return result;
   }
-  // // First bin didn't work? Try next bin
   // if (i < 31) {
   //   result = bins[i + 1];
   //   if (result != NULL) {
@@ -515,7 +518,7 @@ static chunk_t* small_malloc(size_int request) {
   }
   assert(result == NULL);
   // Trying the rest of the small bins
-  for (int j = i + 2; j < 32 && (j - i) < SMALL_BIN_SEARCH_MAX; j++) {
+  for (int j = i + 1; j < 32 && (j - i) < SMALL_BIN_SEARCH_MAX; j++) {
     result = bins[j];
     if (result != NULL) {
       remove_small_chunk(result);
@@ -637,6 +640,17 @@ static chunk_t* large_malloc(size_int request) {
   if (IS_HUGE_SIZE(request)) {
     return huge_malloc(request);
   }
+
+  if (VICTIM_BIN != NULL && CAN_SPLIT_CHUNK(VICTIM_BIN, request)) {
+    chunk_t* result = VICTIM_BIN;
+    VICTIM_BIN = split_chunk(VICTIM_BIN, request);
+    return result;
+  } else if (VICTIM_BIN != NULL && CHUNK_SIZE(VICTIM_BIN) >= request) {
+    chunk_t* result = VICTIM_BIN;
+    VICTIM_BIN = NULL;
+    return result;
+  }
+
   #ifdef DEBUG
   bin_index n = large_request_index(request);
   #endif
@@ -905,7 +919,7 @@ static void* realloc_chunk_and_before(void* ptr, size_int request) {
     remove_chunk(prev_chunk);
   size_int new_size = COMBINED_SIZES(prev_chunk, chunk);
   prev_chunk->current_size = new_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
-  memcpy(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
+  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
   if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
     chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
     insert_chunk(splitted_chunk);
@@ -935,7 +949,7 @@ static void* realloc_chunk_before_and_after(void* ptr, size_int request) {
   else
     remove_chunk(next_chunk);
   prev_chunk->current_size = total_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
-  memcpy(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
+  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
   if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
     chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
     insert_chunk(splitted_chunk);
