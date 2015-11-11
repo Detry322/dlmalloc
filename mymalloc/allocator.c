@@ -87,6 +87,16 @@ static int remove_large_linked_list_chunk(bigchunk_t* chunk);
 static chunk_t* huge_malloc(size_int request);
 static int remove_huge_chunk(bigchunk_t* chunk);
 static int insert_huge_chunk(bigchunk_t* chunk);
+static void remove_chunk_or_victim(chunk_t* chunk);
+static void* default_realloc(void* ptr, size_t size);
+static chunk_t* split_mallocd_chunk(chunk_t* chunk, size_int size);
+static void* realloc_chunk_is_smaller(void* ptr, size_t size);
+static void* realloc_chunk_and_after(void* ptr, size_int request);
+static void* realloc_chunk_and_before(void* ptr, size_int request);
+static void* realloc_chunk_before_and_after(void* ptr, size_int request);
+static void* realloc_chunk_after_extend_heap(void* ptr, size_int request);
+static void* realloc_chunk_is_larger(void* ptr, size_int request);
+static void resize_chunk_and_split(chunk_t* base, size_int new_size, size_int request);
 
 // [END STATIC METHOD DECLARATIONS]
 /* ------------------------------------------------------------------------- */
@@ -169,6 +179,8 @@ static inline void link_chunk_with_parent(bigchunk_t* chunk, bigchunk_t* new_chi
   chunk->parent = NULL;
 }
 
+// Safely makes the replacement's children equal to chunk's children, also replacing
+// the parent pointers in chunk's children.
 static inline void link_children_with_parent(bigchunk_t* chunk, bigchunk_t* replacement) {
   replacement->children[0] = chunk->children[0];
   replacement->children[1] = chunk->children[1];
@@ -327,20 +339,6 @@ static int remove_chunk(chunk_t* chunk) {
     return remove_small_chunk(chunk);
 }
 
-// Pseudocode - First, calculate the bin this node should go in. Set the bin
-// field of this chunk to that. If that bin is empty:
-// Calculate the fast log of the size, and subtract two. This is the "shift" field
-// Set the parent to NO_PARENT_ROOT_NODE and set the bin to point to this node. Return 2.
-// If that bin has elements: Traverse down the tree by going to the child that
-// corresponds to (chunk_size >> shift) & 1. Stop when one of these things happens:
-// 1. The node you're currently at is CHUNK_SIZES_EQUAL to the other chunk. Insert
-// This node behind the node you're currently looking at in the linked list and
-// update all the correct fields. Return 0.
-// 2. You're about to go down a path where the child is null. Simply set the parent
-// of this node to the parent, and the child of the parent to you. Set the left and
-// right pointers of the linked list to yourself. Return 1.
-// As you're traversing down the list, the "shift" field should be 1 less than it's parent.
-
 static int insert_huge_chunk(bigchunk_t* chunk) {
   int result = 0;
   if (HUGE_BIN == NULL) {
@@ -356,6 +354,27 @@ static int insert_huge_chunk(bigchunk_t* chunk) {
   HUGE_BIN = (chunk_t*) chunk;
   return result;
 }
+
+static void remove_chunk_or_victim(chunk_t* chunk) {
+  if (chunk == VICTIM_BIN)
+    VICTIM_BIN = NULL;
+  else
+    remove_chunk(chunk);
+}
+
+// Pseudocode - First, calculate the bin this node should go in. Set the bin
+// field of this chunk to that. If that bin is empty:
+// Calculate the fast log of the size, and subtract two. This is the "shift" field
+// Set the parent to NO_PARENT_ROOT_NODE and set the bin to point to this node. Return 2.
+// If that bin has elements: Traverse down the tree by going to the child that
+// corresponds to (chunk_size >> shift) & 1. Stop when one of these things happens:
+// 1. The node you're currently at is CHUNK_SIZES_EQUAL to the other chunk. Insert
+// This node behind the node you're currently looking at in the linked list and
+// update all the correct fields. Return 0.
+// 2. You're about to go down a path where the child is null. Simply set the parent
+// of this node to the parent, and the child of the parent to you. Set the left and
+// right pointers of the linked list to yourself. Return 1.
+// As you're traversing down the list, the "shift" field should be 1 less than it's parent.
 
 static int insert_large_chunk(bigchunk_t* chunk) {
   assert(IS_LARGE_CHUNK(chunk));
@@ -463,7 +482,9 @@ static int insert_chunk(chunk_t* chunk) {
 static chunk_t* split_chunk(chunk_t* chunk, size_int request) {
   assert(CAN_SPLIT_CHUNK(chunk, request));
   assert(IS_CURRENT_FREE(chunk));
-  size_int leftover = CHUNK_SIZE(chunk) - request - sizeof(size_int);
+  size_int leftover = CHUNK_SIZE(chunk) - request - sizeof(size_int); // It takes sizeof(size_int) bytes
+                                                                      // to store the size of the current chunk
+                                                                      // So we need to remove that from the leftover.
   chunk->current_size = request | IS_PREVIOUS_INUSE(chunk);
   chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
   next_chunk->previous_size = request;
@@ -497,13 +518,6 @@ static chunk_t* small_malloc(size_int request) {
     remove_small_chunk(result);
     return result;
   }
-  // if (i < 31) {
-  //   result = bins[i + 1];
-  //   if (result != NULL) {
-  //     remove_small_chunk(result);
-  //     return result;
-  //   }
-  // }
   // First two bins didn't work? Try the victim
   // Below can be consolidated into a single if statement.
   if (VICTIM_BIN != NULL && // If it exists
@@ -783,10 +797,7 @@ void my_free(void *ptr) {
   bool was_end_of_heap = IS_END_OF_HEAP(chunk);
   if (CAN_COMBINE_PREVIOUS(chunk)) { // This order is important, since the next chunk has to have the size at the end;
     chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
-    if (prev_chunk == VICTIM_BIN)
-      VICTIM_BIN = NULL;
-    else
-      remove_chunk(prev_chunk);
+    remove_chunk_or_victim(prev_chunk);
     chunk = combine_chunks(prev_chunk, chunk);
   }
   if (CAN_COMBINE_NEXT(chunk)) {
@@ -794,10 +805,8 @@ void my_free(void *ptr) {
     if (!IS_END_OF_HEAP(next_chunk) && IS_LARGE_CHUNK(next_chunk) && !IS_HUGE_CHUNK(next_chunk) && !IS_VICTIM(next_chunk)) {
       assert(IS_VALID_LARGE_CHUNK((bigchunk_t*)next_chunk));
     }
-    if (!IS_END_OF_HEAP(next_chunk) && !IS_VICTIM(next_chunk))
-      remove_chunk(next_chunk);
-    if (next_chunk == VICTIM_BIN)
-      VICTIM_BIN = NULL;
+    if (!IS_END_OF_HEAP(next_chunk))
+      remove_chunk_or_victim(next_chunk);
     if (IS_END_OF_HEAP(next_chunk))
       was_end_of_heap = true;
     chunk = combine_chunks(chunk, next_chunk);
@@ -864,13 +873,13 @@ static void* realloc_chunk_is_smaller(void* ptr, size_t size) {
   if (CAN_SPLIT_CHUNK(chunk, size)) {
     chunk_t* splitted_chunk = split_mallocd_chunk(chunk, size);
     bool was_end_of_heap = false;
+    // To reduce fragmentation, and to preserve the invariant that no two free chunks are
+    // next to each other, we must coalesce this newly splitted chunk.
     if (CAN_COMBINE_NEXT(splitted_chunk)) {
       chunk_t* next_chunk = NEXT_HEAP_CHUNK(splitted_chunk);
       was_end_of_heap = IS_END_OF_HEAP(next_chunk);
-      if (!IS_END_OF_HEAP(next_chunk) && !IS_VICTIM(next_chunk))
-        remove_chunk(next_chunk);
-      if (IS_VICTIM(next_chunk))
-        VICTIM_BIN = NULL;
+      if (!IS_END_OF_HEAP(next_chunk))
+        remove_chunk_or_victim(next_chunk);
       splitted_chunk = combine_chunks(splitted_chunk, next_chunk);
     }
     if (!was_end_of_heap)
@@ -881,6 +890,18 @@ static void* realloc_chunk_is_smaller(void* ptr, size_t size) {
   return CHUNK_TO_USER_POINTER(chunk);
 }
 
+static void resize_chunk_and_split(chunk_t* base, size_int new_size, size_int request) {
+  base->current_size = new_size | IS_PREVIOUS_INUSE(base) | CURRENT_CHUNK_INUSE;
+  if (CAN_SPLIT_CHUNK(base, request)) {
+    chunk_t* splitted_chunk = split_mallocd_chunk(base, request);
+    insert_chunk(splitted_chunk);
+    SET_PREVIOUS_INUSE(splitted_chunk);
+    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
+    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
+  }
+  SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(base));
+}
+
 static void* realloc_chunk_and_after(void* ptr, size_int request) {
   chunk_t* chunk = USER_POINTER_TO_CHUNK(ptr);
   chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
@@ -888,20 +909,9 @@ static void* realloc_chunk_and_after(void* ptr, size_int request) {
   assert(IS_CURRENT_INUSE(chunk));
   if (COMBINED_SIZES(chunk, next_chunk) < request || IS_END_OF_HEAP(next_chunk))
     return NULL;
-  if (next_chunk == VICTIM_BIN)
-    VICTIM_BIN = NULL;
-  else
-    remove_chunk(next_chunk);
+  remove_chunk_or_victim(next_chunk);
   size_int new_size = COMBINED_SIZES(chunk, next_chunk);
-  chunk->current_size = new_size | IS_CURRENT_INUSE(chunk) | IS_PREVIOUS_INUSE(chunk);
-  SET_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(chunk));
-  if (CAN_SPLIT_CHUNK(chunk, request)) {
-    chunk_t* splitted_chunk = split_mallocd_chunk(chunk, request);
-    insert_chunk(splitted_chunk);
-    SET_PREVIOUS_INUSE(splitted_chunk);
-    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
-    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
-  }
+  resize_chunk_and_split(chunk, new_size, request);
   return CHUNK_TO_USER_POINTER(chunk);
 }
 
@@ -911,22 +921,14 @@ static void* realloc_chunk_and_before(void* ptr, size_int request) {
   assert(IS_CURRENT_INUSE(chunk));
   assert(IS_CURRENT_INUSE(NEXT_HEAP_CHUNK(chunk)));
   chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
-  if (COMBINED_SIZES(prev_chunk, chunk) < request)
-    return NULL;
-  if (prev_chunk == VICTIM_BIN)
-    VICTIM_BIN = NULL;
-  else
-    remove_chunk(prev_chunk);
   size_int new_size = COMBINED_SIZES(prev_chunk, chunk);
-  prev_chunk->current_size = new_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
-  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
-  if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
-    chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
-    insert_chunk(splitted_chunk);
-    SET_PREVIOUS_INUSE(splitted_chunk);
-    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
-    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
-  }
+  if (new_size < request)
+    return NULL;
+
+  remove_chunk_or_victim(prev_chunk);
+  size_int old_size = CHUNK_SIZE(chunk);
+  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, old_size);
+  resize_chunk_and_split(prev_chunk, new_size, request);
   return CHUNK_TO_USER_POINTER(prev_chunk);
 }
 
@@ -937,26 +939,14 @@ static void* realloc_chunk_before_and_after(void* ptr, size_int request) {
   assert(IS_CURRENT_FREE(NEXT_HEAP_CHUNK(chunk)));
   chunk_t* prev_chunk = PREVIOUS_HEAP_CHUNK(chunk);
   chunk_t* next_chunk = NEXT_HEAP_CHUNK(chunk);
-  size_int total_size = CHUNK_SIZE(chunk) + CHUNK_SIZE(prev_chunk) + CHUNK_SIZE(next_chunk) + 2*sizeof(size_int);
-  if (total_size < request || IS_END_OF_HEAP(next_chunk))
+  size_int new_size = CHUNK_SIZE(chunk) + CHUNK_SIZE(prev_chunk) + CHUNK_SIZE(next_chunk) + 2*sizeof(size_int);
+  if (new_size < request || IS_END_OF_HEAP(next_chunk))
     return NULL;
-  if (prev_chunk == VICTIM_BIN)
-    VICTIM_BIN = NULL;
-  else
-    remove_chunk(prev_chunk);
-  if (next_chunk == VICTIM_BIN)
-    VICTIM_BIN = NULL;
-  else
-    remove_chunk(next_chunk);
-  prev_chunk->current_size = total_size | IS_PREVIOUS_INUSE(prev_chunk) | CURRENT_CHUNK_INUSE;
-  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, CHUNK_SIZE(chunk));
-  if (CAN_SPLIT_CHUNK(prev_chunk, request)) {
-    chunk_t* splitted_chunk = split_mallocd_chunk(prev_chunk, request);
-    insert_chunk(splitted_chunk);
-    SET_PREVIOUS_INUSE(splitted_chunk);
-    CLEAR_PREVIOUS_INUSE(NEXT_HEAP_CHUNK(splitted_chunk));
-    NEXT_HEAP_CHUNK(splitted_chunk)->previous_size = CHUNK_SIZE(splitted_chunk);
-  }
+  remove_chunk_or_victim(next_chunk);
+  remove_chunk_or_victim(prev_chunk);
+  size_int old_size = CHUNK_SIZE(chunk);
+  memmove(CHUNK_TO_USER_POINTER(prev_chunk), ptr, old_size);
+  resize_chunk_and_split(prev_chunk, new_size, request);
   return CHUNK_TO_USER_POINTER(prev_chunk);
 }
 
